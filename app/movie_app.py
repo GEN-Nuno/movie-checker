@@ -1749,8 +1749,34 @@ class MovieApp:
 
 
 def send_mail_cli() -> int:
-    """画面無しで 取得 → 判定 → 送信 → 終了 (タスク スケジューラから)。戻りは終了コード。"""
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    """画面無しで 取得 → 判定 → 送信 → 終了 (タスク スケジューラから)。戻りは終了コード。
+    exe (console=False) では stdout が無いので print は捨てる (記録は notify_log.json)。落ちても窓を出さない。"""
+    if sys.stdout is not None:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    try:
+        return _send_mail_cli()
+    except Exception as e:  # 窓無しの exe で例外の窓を出して止まらないように
+        _say(f"失敗: {type(e).__name__}: {e}")
+        try:
+            log_p = APP_DIR / "notify_log.json"
+            log = load_json(log_p)
+            log = log if isinstance(log, list) else []
+            log.append({"at": datetime.now().strftime("%Y-%m-%d %H:%M"), "kind": "cli", "count": 0, "ok": False, "error": f"{type(e).__name__}: {str(e)[:80]}", "why": ""})
+            save_json(log_p, log[-200:])
+        except Exception:
+            pass
+        return 3
+
+
+def _say(msg: str) -> None:
+    if sys.stdout is not None:
+        print(msg)
+
+
+def _send_mail_cli() -> int:
     settings = load_json(SETTINGS_FILE) or {}
     wl = load_json(WATCHLIST_FILE)
     dwl = load_json(DIR_WL_FILE)
@@ -1758,14 +1784,14 @@ def send_mail_cli() -> int:
     rk = fetch_ranking()
     now_showing = {m["title"]: m for m in ms + rk}
     if not now_showing:
-        print("取得できませんでした:", fetch.error_text(200) or "0 件")
+        _say("取得できませんでした: " + (fetch.error_text(200) or "0 件"))
         return 2
     save_json(CACHE_FILE, {"updated": datetime.now().strftime("%Y-%m-%d %H:%M"), "movies": list(now_showing.values())})
     r = notify.run(settings, APP_DIR, wl, dwl, now_showing, kind="auto", theaters_fn=fetch_theaters_multi)
     if r.get("error"):
-        print("メール:", r["error"])
+        _say("メール: " + r["error"])
         return 1
-    print("メール:", f"送りました ({r['count']} 件)" if r.get("sent") else f"送っていません ({r.get('why', '')})")
+    _say("メール: " + (f"送りました ({r['count']} 件)" if r.get("sent") else f"送っていません ({r.get('why', '')})"))
     return 0
 
 
