@@ -5,7 +5,7 @@ from __future__ import annotations
 import html as htmlmod
 import smtplib
 import ssl
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Callable
@@ -280,3 +280,81 @@ def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, no
             state["last_digest"] = now.strftime("%Y-%m-%d")
         save_json(state_p, state)
     return record(real_kind, len(chosen) if real_kind == "change" else len(items), "")
+
+
+# ---- 設定の案内 (MV-6) ----
+PRESETS_CHECKED = "2026-10"     # 雛形を確かめた月 (提供元が方式を変える事がある)
+PRESETS = {
+    "Gmail": {"usable": True, "host": "smtp.gmail.com", "port": 465, "mode": "ssl",
+              "steps": ["Google アカウント → セキュリティ → 『2 段階認証プロセス』をオンにする",
+                        "同じページの『アプリ パスワード』を開き、名前 (例: 映画チェッカー) を付けて『作成』",
+                        "出てきた 16 桁をこの窓の『パスワード』に貼る (普段のパスワードは使えない)",
+                        "『SMTP user』は Gmail のアドレス、『宛先』は受け取るアドレス (同じでよい)"],
+              "note": "2 段階認証がオフだと『アプリ パスワード』の項目が出ません"},
+    "Yahoo! JAPAN": {"usable": True, "host": "smtp.mail.yahoo.co.jp", "port": 465, "mode": "ssl",
+                     "steps": ["Yahoo! JAPAN ID の『登録情報』→『アプリパスワード』で発行する (IMAP / SMTP 用)",
+                               "発行されたパスワードをこの窓の『パスワード』に貼る",
+                               "『SMTP user』は Yahoo! メールのアドレス (@yahoo.co.jp)"],
+                     "note": "提供元の設定で『外部メール ソフトからのアクセス』を許可しておく"},
+    "iCloud": {"usable": True, "host": "smtp.mail.me.com", "port": 587, "mode": "starttls",
+               "steps": ["appleid.apple.com → サインインとセキュリティ → 『アプリ用パスワード』で作る",
+                         "作ったパスワードをこの窓の『パスワード』に貼る",
+                         "『SMTP user』は iCloud のアドレス (@icloud.com)"],
+               "note": "Apple ID の 2 ファクタ認証が前提"},
+    "Outlook / Hotmail": {"usable": False, "host": "", "port": 0, "mode": "",
+                          "steps": [],
+                          "note": "使えません: Microsoft は 2024-09 に個人の Outlook.com の SMTP の基本認証 (パスワード・アプリ パスワード) を止め、OAuth2 だけになりました。このアプリは鍵を持たない方針なので、Gmail などの送り元を使ってください"},
+    "その他": {"usable": True, "host": "", "port": 465, "mode": "ssl",
+             "steps": ["提供元の『メール ソフトの設定』で SMTP (送信) の host を調べる",
+                       "465 なら SSL、587 なら STARTTLS を選ぶ (25 は使えません)",
+                       "普段のパスワードで駄目なら『アプリ パスワード』の有無を調べる"],
+             "note": ""},
+}
+
+
+def hint(error: str) -> str:
+    """失敗の訳に添える次の一手。"""
+    if not error:
+        return ""
+    if "認証" in error:
+        return "アプリ パスワードを作り直して貼る (普段のパスワードは使えない事が多い)。user はメールアドレス全体"
+    if "切りました" in error or "TLS" in error:
+        return "port と方式の組を確かめる (465 = SSL、587 = STARTTLS)。雛形のボタンで入れ直す"
+    if "繋がりません" in error or "応答しません" in error or "ConnectionRefused" in error or "timed out" in error:
+        return "ネットとファイアウォールを確かめる。host の綴りも"
+    if "資格情報" in error:
+        return "『パスワード』に入れて『保存』を押す"
+    return f"提供元の設定が変わった事もある (雛形は {PRESETS_CHECKED} に確かめた物)"
+
+
+def recent_log(data_dir: Path, n: int = 20) -> list[dict]:
+    log = load_json(Path(data_dir) / "notify_log.json")
+    if not isinstance(log, list):
+        return []
+    return list(reversed(log[-n:]))
+
+
+def next_digest(cfg: dict, state: dict, now: datetime) -> datetime | None:
+    """次のまとめを送る日時 (曜日と時)。まとめが無効なら None。今日まだ送っていなくて時刻を過ぎていれば今日。"""
+    w = cfg.get("weekly") or {}
+    if not w.get("enabled"):
+        return None
+    wd, hour = int(w.get("weekday", 5)), int(w.get("hour", 8))
+    for d in range(0, 8):
+        cand = (now + timedelta(days=d)).replace(hour=hour, minute=0, second=0, microsecond=0)
+        if cand.weekday() != wd:
+            continue
+        if d == 0 and (now.hour >= hour and state.get("last_digest") == now.strftime("%Y-%m-%d")):
+            continue
+        return cand
+    return None
+
+
+def log_line(entry: dict) -> str:
+    kinds = {"change": "新着", "digest": "まとめ", "test": "試し", "skip": "送らず", "cli": "--send-mail"}
+    k = kinds.get(entry.get("kind", ""), entry.get("kind", ""))
+    if entry.get("error"):
+        return f"{entry.get('at', '')}  {k}  ⚠ {entry['error']}"
+    if entry.get("kind") == "skip":
+        return f"{entry.get('at', '')}  {k}  ({entry.get('why', '')})"
+    return f"{entry.get('at', '')}  {k}  ✅ {entry.get('count', 0)} 件"

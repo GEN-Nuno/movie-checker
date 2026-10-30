@@ -25,7 +25,7 @@ from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
-from moviecheck import fetch, notify, paths, store
+from moviecheck import fetch, notify, paths, store, taste
 from moviecheck.version import __version__
 from mail_dialog import MailSettingsDialog
 from moviecheck.fetch import (  # noqa: F401 — 画面が使う名前 (置き場だけ変えた)
@@ -52,6 +52,7 @@ WATCHLIST_FILE = APP_DIR / "watchlist.json"
 DIR_WL_FILE = APP_DIR / "director_watchlist.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
 CACHE_FILE = APP_DIR / "movie_cache.json"
+TASTE_FILE = APP_DIR / "taste.json"   # 好みの学習 (MV-8)
 
 # eiga.com の URL・都道府県は moviecheck.fetch に (MV-1)
 REGION_GROUPS = [
@@ -369,6 +370,12 @@ class MovieApp:
             self.settings["pref_codes"] = ["13"]
         self.is_fetching = False
         self._timer = None
+        self._next_update = None          # 次の自動更新 (MV-7 の帯)
+        self._last_fetch = {"ts": "", "src": "", "error": ""}
+        self._fetch_page = None
+        self.taste = taste.Model(TASTE_FILE)   # 好みの学習 (MV-8)
+        self._ns_scores = {}
+        self._ns_sort = "rank"            # rank | taste
         self.F = {
             "title": tkfont.Font(family="Segoe UI", size=16, weight="bold"),
             "h2": tkfont.Font(family="Segoe UI", size=12, weight="bold"),
@@ -381,6 +388,7 @@ class MovieApp:
         self._build_ui()
         self._refresh_wl()
         self._show_store_notes()
+        self.refresh_bar()
         self.root.after(100, self._maybe_import_old_data)
         self.root.after(300, self._startup_fetch)
 
@@ -419,7 +427,12 @@ class MovieApp:
 
         self.status_lbl = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["card"])
         self.status_lbl.pack(side="right", padx=20)
+        tk.Button(pf, text="♥ 好み", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+                  padx=10, pady=3, bd=0, command=self._open_taste).pack(side="left", padx=(8, 0))
 
+        # 状況の帯 (MV-7): 最終取得・次の自動更新・メール・好み
+        self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["text2"], bg=C["bg3"], anchor="w", padx=20, pady=3)
+        self.bar_lbl.pack(fill="x")
         tk.Frame(self.root, bg=C["separator"], height=1).pack(fill="x")
 
         self.progress = ttk.Progressbar(self.root, style="Prog.Horizontal.TProgressbar", mode="determinate", maximum=11)
@@ -604,16 +617,21 @@ class MovieApp:
                       highlightcolor=C["accent"], highlightbackground=C["border"])
         se.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 8))
         self._placeholder(se, "タイトルまたは監督名で検索...")
+        self.search_entry = se
         self._btn(sf, "手動取得", self._fetch_movies, C["bg3"]).pack(side="right")
+        self.sort_btn = self._btn(sf, "おすすめ順", self._toggle_ns_sort, C["bg3"])
+        self.sort_btn.pack(side="right", padx=(0, 8))
 
         tf = tk.Frame(p, bg=C["bg"])
         tf.pack(fill="both", expand=True, padx=16, pady=(8, 4))
-        self.ns_tree = ttk.Treeview(tf, style="NS.Treeview", columns=("no", "title", "director"),
+        self.ns_tree = ttk.Treeview(tf, style="NS.Treeview", columns=("no", "star", "title", "director"),
                                     show="headings", selectmode="browse")
         self.ns_tree.heading("no", text="#")
+        self.ns_tree.heading("star", text="★", command=self._toggle_ns_sort)
         self.ns_tree.heading("title", text="タイトル")
         self.ns_tree.heading("director", text="監督")
         self.ns_tree.column("no", width=36, minwidth=30, anchor="center")
+        self.ns_tree.column("star", width=44, minwidth=36, anchor="center")
         self.ns_tree.column("title", width=290, minwidth=160)
         self.ns_tree.column("director", width=130, minwidth=80)
         sc = ttk.Scrollbar(tf, orient="vertical", command=self.ns_tree.yview)
@@ -621,6 +639,8 @@ class MovieApp:
         self.ns_tree.pack(side="left", fill="both", expand=True)
         sc.pack(side="right", fill="y")
         self.ns_tree.bind("<Double-1>", self._on_ns_dblclick)
+        self.ns_tree.bind("<Button-3>", self._on_ns_rclick)
+        self.ns_tree.bind("<<TreeviewSelect>>", self._on_ns_select)
         self.search_var.trace_add("write", lambda *a: self._filter_ns())
 
         bb = tk.Frame(p, bg=C["bg"])
@@ -853,6 +873,123 @@ class MovieApp:
         return notify.run(self.settings, APP_DIR, list(self.watchlist), list(self.dir_watchlist), dict(self.now_showing),
                           kind=kind, theaters_fn=fetch_theaters_multi)
 
+    def data_dir(self) -> Path:
+        return APP_DIR
+
+    def send_mail_command(self) -> str:
+        """タスク スケジューラに登録する 1 行 (exe か python + 源)。"""
+        if _FROZEN:
+            return f'"{sys.executable}" --send-mail'
+        return f'"{sys.executable}" "{Path(__file__).resolve()}" --send-mail'
+
+    # ---- 状況の帯 (MV-7) ----
+    def refresh_bar(self):
+        """題名の下の 1 行。主スレッドから呼ぶ (別スレッドは root.after で)。"""
+        parts = []
+        if self._fetch_page:
+            p, n = self._fetch_page
+            parts.append(f"📡 上映中 {p}/11 ページ ({n} 件)…")
+        elif self._last_fetch.get("error"):
+            prev = f" · 前回 {self._last_fetch['ts']} のまま" if self._last_fetch.get("ts") else ""
+            parts.append(f"取得 失敗 ({self._last_fetch['error']}){prev}")
+        elif self._last_fetch.get("ts"):
+            parts.append(f"取得 {self._last_fetch['ts'][5:]} ({self._last_fetch['src']})")
+        else:
+            parts.append("取得 まだ")
+        if self._next_update:
+            parts.append(f"次の自動更新 {self._next_update.strftime('%H:%M')}")
+        cfg = notify.cfg_of(self.settings)
+        if cfg.get("to"):
+            entries = notify.recent_log(APP_DIR, 20)
+            last = next((e for e in entries if e.get("kind") != "skip"), None)
+            state = load_json(APP_DIR / "notify_state.json") or {}
+            nd = notify.next_digest(cfg, state if isinstance(state, dict) else {}, datetime.now())
+            m = "メール: 最後 " + (notify.log_line(last)[5:] if last else "まだ")
+            if nd:
+                m += f" / 次のまとめ {nd.strftime('%m/%d')} ({notify.WEEKDAYS[nd.weekday()]}) {nd.hour} 時"
+            parts.append(m)
+        else:
+            parts.append("メール: 未設定 (✉ メール で設定)")
+        t = self.taste.tally()
+        parts.append(f"好み: 👍{t['up']} 👎{t['down']}" if t["n"] else "好み: まだ学んでいない (WL に入れる・右クリック)")
+        self.bar_lbl.config(text="  ·  ".join(parts))
+
+    # ---- 好みの学習 (MV-8) ----
+    def _taste_feedback(self, movie: dict, kind: str):
+        rank = None
+        if movie.get("title") in self.now_showing:
+            rank = list(self.now_showing).index(movie["title"]) + 1
+        self.taste.feedback_on(movie, kind, rank)
+        self._filter_ns()
+        self.refresh_bar()
+        self._status(f"♥ 学びました: 「{movie.get('title', '')}」{taste.LABELS[kind]}")
+
+    def _toggle_ns_sort(self):
+        self._ns_sort = "taste" if self._ns_sort == "rank" else "rank"
+        self.sort_btn.config(text="人気順" if self._ns_sort == "taste" else "おすすめ順")
+        if self._ns_sort == "taste" and not self.taste.learned():
+            self._status("♥ まだ学んでいません (WL に入れる・右クリックで 👍 👎)")
+        self._filter_ns()
+
+    def _on_ns_select(self, event=None):
+        sel = self.ns_tree.selection()
+        if not sel or sel[0] not in self._ns_scores:
+            return
+        s = self._ns_scores[sel[0]]
+        if s.get("why"):
+            self._status(f"♥ なぜ: {s['why']} (点 {s['score']:+.1f})")
+
+    def _on_ns_rclick(self, event):
+        iid = self.ns_tree.identify_row(event.y)
+        if not iid:
+            return
+        self.ns_tree.selection_set(iid)
+        title, info, is_ns = self._get_ns_item_info(iid)
+        movie = {"title": title, "director": info.get("director", "")}
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="➕ ウォッチリストに追加", command=self._add_from_ns)
+        menu.add_separator()
+        menu.add_command(label="👍 観た: 良かった", command=lambda: self._taste_feedback(movie, "good"))
+        menu.add_command(label="👎 観た: いまいち", command=lambda: self._taste_feedback(movie, "bad"))
+        menu.add_command(label="🚫 興味なし", command=lambda: self._taste_feedback(movie, "skip"))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _open_taste(self):
+        win = tk.Toplevel(self.root)
+        win.title("好み (手元で学んだ物)")
+        win.configure(bg=C["bg"])
+        win.transient(self.root)
+        f = tk.Frame(win, bg=C["bg"], padx=16, pady=12)
+        f.pack(fill="both", expand=True)
+        t = self.taste.tally()
+        tk.Label(f, text=f"反応 {t['n']} 件 (👍 {t['up']} / 👎 {t['down']})。外には送りません。間違った学習は『消す』で戻せます。",
+                 font=self.F["small"], fg=C["text2"], bg=C["bg"], wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
+        cols = tk.Frame(f, bg=C["bg"])
+        cols.pack(fill="both", expand=True)
+        likes, dislikes = self.taste.top(10)
+
+        def column(parent, head, rows):
+            fr = tk.Frame(parent, bg=C["card"], padx=10, pady=8, highlightthickness=1, highlightbackground=C["border"])
+            fr.pack(side="left", fill="both", expand=True, padx=4)
+            tk.Label(fr, text=head, font=self.F["btn"], fg=C["text"], bg=C["card"]).pack(anchor="w")
+            if not rows:
+                tk.Label(fr, text="(まだ無い)", font=self.F["small"], fg=C["text3"], bg=C["card"]).pack(anchor="w")
+            for feat, v in rows:
+                r = tk.Frame(fr, bg=C["card"])
+                r.pack(fill="x", pady=1)
+                tk.Label(r, text=f"{taste.feature_label(feat)}  {v:+.1f}", font=self.F["small"], fg=C["text2"], bg=C["card"]).pack(side="left")
+                tk.Button(r, text="消す", font=self.F["caption"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=6, cursor="hand2",
+                          command=lambda ft=feat: (self.taste.forget(ft), win.destroy(), self._open_taste(), self._filter_ns())).pack(side="right")
+
+        column(cols, "好き (重みの上位)", likes)
+        column(cols, "嫌い (重みの下位)", dislikes)
+        tk.Label(f, text="仕組み: 監督・題名の語・人気の帯を特徴にした線形バンディット。WL 追加 +1、👍 +2、👎 −1、興味なし −1 で重みを少しずつ動かし、たまに 🎲 で未知の物を出します。",
+                 font=self.F["caption"], fg=C["text3"], bg=C["bg"], wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
+        tk.Button(f, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", bd=0, padx=14, pady=3, cursor="hand2", command=win.destroy).pack(anchor="e", pady=(8, 0))
+
     def _maybe_notify(self):
         """取得の後: 変化があれば (か、まとめの日なら) 送る。設定が無ければ何もしない。"""
         if not (self.settings.get("mail") or {}).get("to") or not self.now_showing:
@@ -867,6 +1004,7 @@ class MovieApp:
                 self._status(f"⚠ メール: {r['error']}")
             elif r.get("sent"):
                 self._status(f"✉ メールを送りました ({r['count']} 件)")
+            self.refresh_bar()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -906,6 +1044,8 @@ class MovieApp:
         if self._timer:
             self.root.after_cancel(self._timer)
         self._timer = self.root.after(21600000, self._auto_update)  # 6 時間
+        self._next_update = datetime.now() + timedelta(hours=6)
+        self.refresh_bar()
 
     def _auto_update(self):
         if self.is_fetching:
@@ -955,6 +1095,8 @@ class MovieApp:
     def _on_prog(self, page, total):
         self.progress["value"] = page
         self._status(f"📡 取得中... ページ {page} ({total}件)")
+        self._fetch_page = (page, total)
+        self.refresh_bar()
 
     def _fetch_got_nothing(self, movies) -> bool:
         """取得が空で訳がある時: 前の一覧とキャッシュは守り、訳だけ状態欄に出す (v3.0 は空で上書きしていた)。"""
@@ -963,7 +1105,10 @@ class MovieApp:
         self.is_fetching = False
         self._show_progress(False)
         self._status(f"⚠ 0件: {self._fetch_failed_text()}")
+        self._last_fetch["error"] = self._fetch_failed_text()
+        self._fetch_page = None
         self._schedule_update()
+        self.refresh_bar()
         return True
 
     def _on_fetch_done(self, movies):
@@ -981,6 +1126,9 @@ class MovieApp:
         self._schedule_update()
 
     def _on_data_ready(self, cache=False, ts=""):
+        self._last_fetch = {"ts": ts, "src": "キャッシュ" if cache else "取得", "error": ""}
+        self._fetch_page = None
+        self.refresh_bar()
         self.ns_cnt.config(text=f"{len(self.now_showing)}件")
         self.ns_upd.config(text=f"更新: {ts}" + (" (キャッシュ)" if cache else ""))
         src = "キャッシュ利用" if cache else "取得完了"
@@ -1002,7 +1150,9 @@ class MovieApp:
         self._ns_extra = {}
         raw = self.search_var.get()
         kw = ""
-        if raw and raw != "🔍 タイトルまたは監督名で検索...":
+        # 仮の文字 (placeholder) が入っている間は検索しない。MV-7 の煙試験で見つけた: 『🔍 』付きの文字と比べていて、
+        # 検索欄に触る前は一覧が空になっていた (書き起こしの源。v3.0 の exe が同じかは未確認)
+        if raw and not getattr(getattr(self, "search_entry", None), "_has_ph", False):
             kw = normalize(raw)
         # 監督名の検索か
         is_dir = False
@@ -1025,14 +1175,19 @@ class MovieApp:
                         break
         n = 0
         seen = set()
-        for title, info in self.now_showing.items():
+        self._ns_scores = {s["title"]: s for s in self.taste.score_all(list(self.now_showing.values()))}
+        items = list(self.now_showing.items())
+        if self._ns_sort == "taste" and self.taste.learned():
+            items.sort(key=lambda kv: -self._ns_scores.get(kv[0], {}).get("score", 0.0))
+        for title, info in items:
             director = info.get("director", "")
             if kw:
                 if kw not in normalize(title) and kw not in normalize(director):
                     continue
             n += 1
             marker = "🟢" if (is_dir and kw) else str(n)
-            self.ns_tree.insert("", "end", iid=title, values=(marker, title, director))
+            star = self._ns_scores.get(title, {}).get("stars", "")
+            self.ns_tree.insert("", "end", iid=title, values=(marker, star, title, director))
             seen.add(normalize(title))
         extra = 0
         if is_dir and kw:
@@ -1045,7 +1200,7 @@ class MovieApp:
                         continue
                     seen.add(normalize(t))
                     iid = f"__ex__{item['name']}\t{t}"
-                    self.ns_tree.insert("", "end", iid=iid, values=("⬜", t, item["name"]))
+                    self.ns_tree.insert("", "end", iid=iid, values=("⬜", "", t, item["name"]))
                     self._ns_extra[iid] = {"title": t, "movie_id": m.get("movie_id", ""), "url": m.get("url", ""), "director": item["name"]}
                     extra += 1
             for w in self.watchlist:
@@ -1057,7 +1212,7 @@ class MovieApp:
                     continue
                 seen.add(normalize(t))
                 iid = f"__ex__wl\t{t}"
-                self.ns_tree.insert("", "end", iid=iid, values=("⬜", t, d))
+                self.ns_tree.insert("", "end", iid=iid, values=("⬜", "", t, d))
                 self._ns_extra[iid] = {"title": t, "movie_id": w.get("movie_id", ""), "url": w.get("url", ""), "director": d}
                 extra += 1
         if kw:
@@ -1506,6 +1661,7 @@ class MovieApp:
             "url": info.get("url", ""),
         })
         save_json(WATCHLIST_FILE, self.watchlist)
+        self._taste_feedback({"title": title, "director": director}, "wl")
         self._refresh_wl()
         self._clear_input()
         disp = f"「{title}」"
@@ -1563,6 +1719,7 @@ class MovieApp:
         save_json(WATCHLIST_FILE, self.watchlist)
         self._refresh_wl()
         self._status(f"✅「{title}」をウォッチリストに追加")
+        self._taste_feedback({"title": title, "director": director}, "wl")
 
     # ---- 上映チェック (映画 WL) ----
     def _check_status(self):

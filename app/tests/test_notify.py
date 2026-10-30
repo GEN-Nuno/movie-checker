@@ -4,6 +4,7 @@ from datetime import datetime
 import pytest
 
 from moviecheck import notify
+from moviecheck.store import save_json
 
 NOW = {"国宝": {"title": "国宝", "movie_id": "100001", "url": "https://eiga.com/movie/100001/", "director": "李相日"},
        "ゴジラ-1.0": {"title": "ゴジラ-1.0", "movie_id": "100002", "url": "https://eiga.com/movie/100002/", "director": "山崎貴"},
@@ -101,3 +102,40 @@ def test_test_mail_does_not_touch_state(env):
 def test_cfg_of_drops_password():
     c = notify.cfg_of({"mail": {"password": "x", "to": "a@b"}})
     assert "password" not in c and c["port"] == 465 and c["weekly"]["weekday"] == 5
+
+
+# ---- MV-6: 雛形・次の一手・記録・次のまとめ ----
+def test_presets_have_tls_ports_and_outlook_is_unusable():
+    for name, p in notify.PRESETS.items():
+        if p["usable"] and p["host"]:
+            assert p["port"] in (465, 587) and p["mode"] in ("ssl", "starttls") and p["steps"]
+    assert not notify.PRESETS["Outlook / Hotmail"]["usable"] and "OAuth2" in notify.PRESETS["Outlook / Hotmail"]["note"]
+    assert notify.PRESETS["Gmail"]["host"] == "smtp.gmail.com" and notify.PRESETS["Gmail"]["mode"] == "ssl"
+
+
+def test_hint_maps_errors_to_next_step():
+    assert "アプリ パスワード" in notify.hint("認証に失敗 (user かパスワード)")
+    assert "465" in notify.hint("サーバーが接続を切りました (host / port)")
+    assert "ネット" in notify.hint("eiga に繋がりません")
+    assert "保存" in notify.hint("パスワードが資格情報にありません")
+    assert notify.PRESETS_CHECKED in notify.hint("送信に失敗 (SMTPException)")
+    assert notify.hint("") == ""
+
+
+def test_next_digest_and_recent_log(tmp_path):
+    from datetime import datetime
+    cfg = {"weekly": {"enabled": True, "weekday": 0, "hour": 8}}   # 月 8 時
+    wed = datetime(2026, 10, 28, 10, 0)                              # 水
+    assert notify.next_digest(cfg, {}, wed) == datetime(2026, 11, 2, 8, 0)
+    mon7 = datetime(2026, 11, 2, 7, 0)
+    assert notify.next_digest(cfg, {}, mon7) == datetime(2026, 11, 2, 8, 0)
+    mon9 = datetime(2026, 11, 2, 9, 0)
+    assert notify.next_digest(cfg, {}, mon9) == datetime(2026, 11, 2, 8, 0)          # まだ送っていない → 今日
+    assert notify.next_digest(cfg, {"last_digest": "2026-11-02"}, mon9) == datetime(2026, 11, 9, 8, 0)
+    assert notify.next_digest({"weekly": {"enabled": False}}, {}, mon9) is None
+    save_json(tmp_path / "notify_log.json", [{"at": "a", "kind": "skip", "why": "変化なし"}, {"at": "b", "kind": "change", "count": 2, "ok": True, "error": ""}, {"at": "c", "kind": "test", "count": 0, "ok": False, "error": "認証に失敗"}])
+    got = notify.recent_log(tmp_path, 2)
+    assert [e["at"] for e in got] == ["c", "b"]
+    assert notify.log_line(got[0]).startswith("c  試し  ⚠ 認証") and "✅ 2 件" in notify.log_line(got[1])
+    assert "(変化なし)" in notify.log_line({"at": "a", "kind": "skip", "why": "変化なし"})
+    assert notify.recent_log(tmp_path / "none") == []
