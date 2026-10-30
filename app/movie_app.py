@@ -24,7 +24,8 @@ from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
-from moviecheck import fetch, store
+from moviecheck import fetch, notify, store
+from mail_dialog import MailSettingsDialog
 from moviecheck.fetch import (  # noqa: F401 — 画面が使う名前 (置き場だけ変えた)
     EIGA_BASE, PREFECTURES,
     fetch_now_showing, fetch_ranking, fetch_theaters_multi, search_eiga,
@@ -404,6 +405,8 @@ class MovieApp:
         self.pref_label.pack(side="left", padx=(0, 8))
         tk.Button(pf, text="変更", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=self._open_region_selector).pack(side="left")
+        tk.Button(pf, text="✉ メール", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+                  padx=10, pady=3, bd=0, command=self._open_mail_settings).pack(side="left", padx=(8, 0))
         self._update_pref_label()
 
         self.status_lbl = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["card"])
@@ -770,6 +773,37 @@ class MovieApp:
         else:
             self.pref_label.config(text=f"{', '.join(names[:2])} 他{len(names) - 2}地域")
 
+    # ---- メール通知 (MV-2) ----
+    C = C  # mail_dialog が app.C / app.F で色と字体を使う
+
+    def save_settings(self):
+        save_json(SETTINGS_FILE, self.settings)
+
+    def _open_mail_settings(self):
+        MailSettingsDialog(self)
+
+    def run_notify(self, kind: str = "auto") -> dict:
+        """別スレッドから呼ぶ。kind = auto | digest | test。戻りは notify.run の物。"""
+        return notify.run(self.settings, APP_DIR, list(self.watchlist), list(self.dir_watchlist), dict(self.now_showing),
+                          kind=kind, theaters_fn=fetch_theaters_multi)
+
+    def _maybe_notify(self):
+        """取得の後: 変化があれば (か、まとめの日なら) 送る。設定が無ければ何もしない。"""
+        if not (self.settings.get("mail") or {}).get("to") or not self.now_showing:
+            return
+
+        def work():
+            r = self.run_notify("auto")
+            self.root.after(0, lambda: done(r))
+
+        def done(r):
+            if r.get("error"):
+                self._status(f"⚠ メール: {r['error']}")
+            elif r.get("sent"):
+                self._status(f"✉ メールを送りました ({r['count']} 件)")
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _open_region_selector(self):
         RegionSelector(self.root, self.pref_codes, self._on_regions_saved)
 
@@ -795,6 +829,7 @@ class MovieApp:
                     self._on_data_ready(cache=True, ts=cache["updated"])
                     if self.watchlist:
                         self._do_check(silent=True)
+                    self._maybe_notify()
                     self._schedule_update()
                     return
             except (ValueError, TypeError, KeyError):
@@ -829,6 +864,7 @@ class MovieApp:
         self._on_data_ready(cache=False, ts=ts)
         if self.watchlist:
             self._do_check(silent=True)
+        self._maybe_notify()
         self._schedule_update()
 
     def _fetch_movies(self):
@@ -875,6 +911,7 @@ class MovieApp:
         self._on_data_ready(cache=False, ts=ts)
         if self.watchlist:
             self._do_check(silent=True)
+        self._maybe_notify()
         self._schedule_update()
 
     def _on_data_ready(self, cache=False, ts=""):
@@ -1711,7 +1748,30 @@ class MovieApp:
         load_theaters()
 
 
+def send_mail_cli() -> int:
+    """画面無しで 取得 → 判定 → 送信 → 終了 (タスク スケジューラから)。戻りは終了コード。"""
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    settings = load_json(SETTINGS_FILE) or {}
+    wl = load_json(WATCHLIST_FILE)
+    dwl = load_json(DIR_WL_FILE)
+    ms = fetch_now_showing()
+    rk = fetch_ranking()
+    now_showing = {m["title"]: m for m in ms + rk}
+    if not now_showing:
+        print("取得できませんでした:", fetch.error_text(200) or "0 件")
+        return 2
+    save_json(CACHE_FILE, {"updated": datetime.now().strftime("%Y-%m-%d %H:%M"), "movies": list(now_showing.values())})
+    r = notify.run(settings, APP_DIR, wl, dwl, now_showing, kind="auto", theaters_fn=fetch_theaters_multi)
+    if r.get("error"):
+        print("メール:", r["error"])
+        return 1
+    print("メール:", f"送りました ({r['count']} 件)" if r.get("sent") else f"送っていません ({r.get('why', '')})")
+    return 0
+
+
 def main():
+    if "--send-mail" in sys.argv[1:]:
+        sys.exit(send_mail_cli())
     try:
         from ctypes import windll
         windll.shcore.SetProcessDpiAwareness(1)

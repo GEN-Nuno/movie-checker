@@ -134,3 +134,9 @@ def test_directed_movies_keeps_director_role_only(fake):
 def test_movie_director_from_ld_json(fake):
     fake({"https://eiga.com/movie/100001/": FakeResp(200, LD_HTML)})
     assert fetch.fetch_movie_director("100001") == "李相日, X"
+
+
+def test_theaters_410_means_not_showing_there(fake):
+    fake({"https://eiga.com/movie-pref/100001/13/": FakeResp(410, "<html>gone</html>")})
+    assert fetch.fetch_theaters("100001", "13") == []
+    assert fetch.last_error is None

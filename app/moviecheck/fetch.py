@@ -60,10 +60,10 @@ def _get(url: str, timeout: int, ok_statuses=(200,)) -> tuple[BeautifulSoup | No
         resp = requests.get(url, headers=HEADERS, timeout=timeout, stream=True)
         status = resp.status_code
         if status not in ok_statuses:
-            if status != 404:
-                _set_error("http", f"eiga.com が {status} を返しました", url)
+            if status in (404, 410):
+                _set_error("http", f"eiga.com に該当のページがありません ({status})", url)
             else:
-                _set_error("http", "eiga.com に該当のページがありません (404)", url)
+                _set_error("http", f"eiga.com が {status} を返しました", url)
             resp.close()
             return None, status
         body = resp.raw.read(MAX_BYTES + 1, decode_content=True)
@@ -187,8 +187,11 @@ def fetch_theaters(movie_id: str, pref_code: str) -> list[dict]:
     if not (_check_id(movie_id, "movie_id") and _check_id(pref_code, "pref_code")):
         return []
     url = f"{EIGA_BASE}/movie-pref/{movie_id}/{pref_code}/"
-    soup, _ = _get(url, 15)
+    soup, status = _get(url, 15)
     if soup is None:
+        if status in (404, 410):   # その県で上映が無い (2026-10 の実測: 410 が返る) は失敗ではない
+            global last_error
+            last_error = None
         return []
     theaters = []
     for h3_a in soup.select("h3 a"):
