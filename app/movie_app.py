@@ -529,7 +529,7 @@ class MovieApp:
         else:
             self._th_wl_frame.pack(fill="both", expand=True)
             self.wl_cnt.config(text=f"{len(self.theater_wl)}館")
-            self.wl_hint.config(text="ダブルクリックで館のページ")
+            self.wl_hint.config(text="")
             self._refresh_theater_wl()
             if not self._th_choices:
                 self._load_theater_choices()
@@ -561,7 +561,7 @@ class MovieApp:
 
         tf = tk.Frame(p, bg=C["bg"])
         tf.pack(fill="both", expand=True, padx=16, pady=(8, 4))
-        self.th_tree = ttk.Treeview(tf, style="WL.Treeview", columns=("name", "count", "updated"), show="headings", selectmode="browse")
+        self.th_tree = ttk.Treeview(tf, style="WL.Treeview", columns=("name", "count", "updated"), show="headings", selectmode="browse", height=4)
         self.th_tree.heading("name", text="映画館")
         self.th_tree.heading("count", text="作品")
         self.th_tree.heading("updated", text="更新")
