@@ -19,6 +19,8 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 HEADERS = {"User-Agent": USER_AGENT}
+POSTER_BASE = "https://media.eiga.com/"   # ポスターはここからだけ (MV-9)
+POSTER_MAX_BYTES = 500 * 1024
 _local = threading.local()  # thread ごとの Session (MV-5: keep-alive)
 SKIP_TEXTS = {"予告編・動画", "レビュー", "作品情報", "作品", "映画館を探す"}
 MAX_BYTES = 3 * 1024 * 1024  # 応答はここで打ち切る (MV-3)
@@ -111,6 +113,59 @@ def _get(url: str, timeout: int, ok_statuses=(200,)) -> tuple[BeautifulSoup | No
     return BeautifulSoup(text, "html.parser"), status
 
 
+def fetch_poster(image_url: str, dest, max_bytes: int = POSTER_MAX_BYTES) -> bool:
+    """ポスターを dest (jpg) に取る (MV-9)。media.eiga.com の url だけ。失敗は False (last_error に訳)。"""
+    from pathlib import Path
+    dest = Path(dest)
+    if dest.exists():
+        return True
+    if not image_url.startswith(POSTER_BASE):
+        _set_error("http", "ポスターの url が eiga.com ではありません", image_url)
+        return False
+    try:
+        resp = _session().get(image_url, headers=HEADERS, timeout=10, stream=True)
+        if resp.status_code != 200:
+            _set_error("http", f"ポスターが取れません ({resp.status_code})", image_url)
+            resp.close()
+            return False
+        body = resp.raw.read(max_bytes + 1, decode_content=True)
+        resp.close()
+        if len(body) > max_bytes or not body:
+            _set_error("http", "ポスターが大きすぎるか空です", image_url)
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".tmp")
+        with open(tmp, "wb") as f:
+            f.write(body)
+        import os
+        os.replace(tmp, dest)
+        return True
+    except requests.RequestException as e:
+        _set_error("net", f"ポスターの取得に失敗 ({type(e).__name__})", image_url)
+        return False
+    except OSError as e:
+        _set_error("net", f"ポスターを書けません ({type(e).__name__})", image_url)
+        return False
+
+
+def prune_posters(posters_dir, keep_ids) -> int:
+    """上映中に無い id の jpg を消す。戻りは消した数。"""
+    from pathlib import Path
+    d = Path(posters_dir)
+    if not d.is_dir():
+        return 0
+    keep = {str(x) for x in keep_ids}
+    n = 0
+    for p in d.glob("*.jpg"):
+        if p.stem not in keep:
+            try:
+                p.unlink()
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
 def _check_id(value: str, what: str) -> bool:
     """URL に入れる id は数字だけ (MV-3)。駄目なら last_error を立てる。"""
     if _ID_RE.match(str(value or "")):
@@ -189,7 +244,24 @@ def _extract_movies(soup: BeautifulSoup) -> list[dict]:
                         if name:
                             directors.append(name)
         director = ", ".join(directors)
-        movies.append({"title": text, "url": full_url, "movie_id": movie_id, "director": director})
+        # MV-9: ポスター (img-box の img)・あらすじ (p.txt)・出演 (cast-staff の『監督』でない li の span)
+        image = ""
+        parent = box.parent
+        img = parent.select_one("div.img-box img") if parent else None
+        if img is not None:
+            src_ = img.get("src") or img.get("data-src") or ""
+            if src_.startswith(POSTER_BASE):
+                image = src_
+        p_txt = box.select_one("p.txt")
+        synopsis = p_txt.get_text(" ", strip=True)[:300] if p_txt else ""
+        cast = []
+        if staff_ul:
+            for li in staff_ul.select("li"):
+                if "監督" in li.get_text():
+                    continue
+                cast.extend(sp.get_text(strip=True) for sp in li.select("span") if sp.get_text(strip=True))
+        movies.append({"title": text, "url": full_url, "movie_id": movie_id, "director": director,
+                       "image": image, "synopsis": synopsis, "cast": cast[:5]})
     for a_tag in soup.select('a[href*="/movie/"]'):
         href = a_tag.get("href", "")
         text = a_tag.get_text(strip=True)

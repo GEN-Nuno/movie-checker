@@ -4,6 +4,7 @@
 requests==2.34.2
 beautifulsoup4==4.15.0
 keyring==25.7.0
+pillow==13.0.0
 # under requests
 certifi==2026.10.23
 charset-normalizer==3.5.2

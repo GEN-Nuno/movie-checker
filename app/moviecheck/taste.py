@@ -1,6 +1,6 @@
 """好みの学習 (MV-8)。手元だけの線形バンディット。外の AI には送らない。
 
-特徴: 監督 (dir:名)、題名の語 (tok:語、NFKC の後の 2 字以上の塊)、順位の帯 (rank:top10 / top30 / rest)。
+特徴: 監督 (dir:名)、出演 (cast:名、先頭 3 人)、題名の語 (tok:語、NFKC の後の 2 字以上の塊)、順位の帯 (rank:top10 / top30 / rest)。
 報酬: WL 追加 +1、監督 WL の作品 +0.5、興味なし -1、観た 👍 +2、観た 👎 -1。
 更新: p = Σ w[f]; w[f] += η_f (r − p)、η_f = 0.1 / √counts[f] (多く見た特徴ほど動かない)、w は ±3 に収める。
 探索: counts の合計が 2 未満 (未知) の物を ε=0.1 の確率で 1 件『試しに』。
@@ -35,6 +35,10 @@ def features(movie: dict, rank: int | None = None) -> list[str]:
     d = (movie.get("director") or "").strip()
     if d:
         out.append("dir:" + d)
+    for c in (movie.get("cast") or [])[:3]:       # 出演 (MV-9、一覧ページから)
+        c = str(c).strip()
+        if c:
+            out.append("cast:" + c)
     title = unicodedata.normalize("NFKC", movie.get("title") or "")
     seen = set()
     for tok in _TOKEN_RE.findall(title):
@@ -139,7 +143,7 @@ def why_text(parts: list[tuple[str, float]]) -> str:
         return ""
     def name(f: str) -> str:
         k, _, v = f.partition(":")
-        return {"dir": "監督 " + v, "tok": f"語『{v}』", "rank": {"top10": "人気 10 位内", "top30": "人気 30 位内", "rest": "人気 31 位以下"}.get(v, v)}.get(k, f)
+        return {"dir": "監督 " + v, "cast": "出演 " + v, "tok": f"語『{v}』", "rank": {"top10": "人気 10 位内", "top30": "人気 30 位内", "rest": "人気 31 位以下"}.get(v, v)}.get(k, f)
     return "、".join(f"{name(f)} {v:+.1f}" for f, v in parts)
 
 
