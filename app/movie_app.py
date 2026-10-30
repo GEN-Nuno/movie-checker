@@ -57,6 +57,7 @@ DIR_WL_FILE = APP_DIR / "director_watchlist.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
 CACHE_FILE = APP_DIR / "movie_cache.json"
 TASTE_FILE = APP_DIR / "taste.json"   # 好みの学習 (MV-8)
+THEATER_WL_FILE = APP_DIR / "theater_watchlist.json"   # 映画館 WL (MV-19)
 POSTERS_DIR = APP_DIR / "posters"       # 札のポスター 3 枚 (MV-9)
 
 # eiga.com の URL・都道府県は moviecheck.fetch に (MV-1)
@@ -372,6 +373,9 @@ class MovieApp:
                 pass
         self.watchlist = load_json(WATCHLIST_FILE)
         self.dir_watchlist = load_json(DIR_WL_FILE)
+        self.theater_wl = load_json(THEATER_WL_FILE)          # [{name, url, pref, area, movies, updated, error}] (MV-19)
+        if not isinstance(self.theater_wl, list):
+            self.theater_wl = []
         self.now_showing = {}
         self._ns_extra = {}
         self._eiga_search_cache = {}
@@ -457,7 +461,7 @@ class MovieApp:
         self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["bar_fg"], bg=C["bar_bg"], anchor="w", padx=24, pady=4)
         self.bar_lbl.pack(fill="x")
 
-        self.progress = ttk.Progressbar(self.root, style="Prog.Horizontal.TProgressbar", mode="determinate", maximum=11)
+        self.progress = ttk.Progressbar(self.root, style="Prog.Horizontal.TProgressbar", mode="determinate", maximum=fetch.TOTAL_PAGES)
 
         main = tk.PanedWindow(self.root, orient="horizontal", bg=C["bg"], sashwidth=1, sashrelief="flat")
         main.pack(fill="both", expand=True, padx=0, pady=0)
@@ -486,6 +490,10 @@ class MovieApp:
             tab_bar, text="監督", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
             padx=14, pady=3, command=lambda: self._switch_left_tab("director"))
         self._ltab_btn_dir.pack(side="left", padx=(2, 0))
+        self._ltab_btn_th = tk.Button(
+            tab_bar, text="映画館", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+            padx=14, pady=3, command=lambda: self._switch_left_tab("theater"))
+        self._ltab_btn_th.pack(side="left", padx=(2, 0))
         self.wl_cnt = tk.Label(tab_bar, text="0件", font=self.F["small"], fg=C["text3"], bg=C["bg"])
         self.wl_cnt.pack(side="right")
         self.wl_hint = tk.Label(tab_bar, text="ダブルクリックで劇場検索", font=self.F["small"], fg=C["text3"], bg=C["bg"])
@@ -496,27 +504,217 @@ class MovieApp:
         self._build_movie_wl_view(self._movie_wl_frame)
         self._dir_wl_frame = tk.Frame(p, bg=C["bg"])
         self._build_dir_wl_view(self._dir_wl_frame)
+        self._th_wl_frame = tk.Frame(p, bg=C["bg"])
+        self._build_theater_wl_view(self._th_wl_frame)
         self._movie_wl_frame.pack(fill="both", expand=True)
 
     def _switch_left_tab(self, mode: str):
         if mode == self._left_mode:
             return
         self._left_mode = mode
+        for fr in (self._movie_wl_frame, self._dir_wl_frame, self._th_wl_frame):
+            fr.pack_forget()
+        for b, m in ((self._ltab_btn_movie, "movie"), (self._ltab_btn_dir, "director"), (self._ltab_btn_th, "theater")):
+            on = m == mode
+            b.config(bg=C["accent"] if on else C["bg3"], fg="white" if on else C["text2"])
         if mode == "movie":
-            self._dir_wl_frame.pack_forget()
             self._movie_wl_frame.pack(fill="both", expand=True)
-            self._ltab_btn_movie.config(bg=C["accent"], fg="white")
-            self._ltab_btn_dir.config(bg=C["bg3"], fg=C["text2"])
             self.wl_cnt.config(text=f"{len(self.watchlist)}件")
             self.wl_hint.config(text="ダブルクリックで劇場検索")
-        else:
-            self._movie_wl_frame.pack_forget()
+        elif mode == "director":
             self._dir_wl_frame.pack(fill="both", expand=True)
-            self._ltab_btn_dir.config(bg=C["accent"], fg="white")
-            self._ltab_btn_movie.config(bg=C["bg3"], fg=C["text2"])
             self.wl_cnt.config(text=f"{len(self.dir_watchlist)}人")
             self.wl_hint.config(text="ダブルクリックで劇場/作品ページ")
             self._refresh_dir_wl()
+        else:
+            self._th_wl_frame.pack(fill="both", expand=True)
+            self.wl_cnt.config(text=f"{len(self.theater_wl)}館")
+            self.wl_hint.config(text="ダブルクリックで館のページ")
+            self._refresh_theater_wl()
+            if not self._th_choices:
+                self._load_theater_choices()
+
+    # ---- 映画館のウォッチリスト (MV-19) ----
+    def _build_theater_wl_view(self, p):
+        tk.Label(p, text="館を登録すると、その館の今の上映作品が並び、新しく掛かった作品はメールの新着に入ります", font=self.F["caption"],
+                 fg=C["text3"], bg=C["bg"], wraplength=420, justify="left").pack(fill="x", padx=16, pady=(8, 0))
+        inp = tk.Frame(p, bg=C["card"], padx=14, pady=10)
+        inp.pack(fill="x", padx=16, pady=(6, 0))
+        row1 = tk.Frame(inp, bg=C["card"])
+        row1.pack(fill="x", pady=(0, 6))
+        tk.Label(row1, text="都道府県", font=self.F["small"], fg=C["text2"], bg=C["card"], width=7, anchor="w").pack(side="left")
+        self._th_pref_var = tk.StringVar(value=PREFECTURES.get((self.pref_codes or ["13"])[0], "東京"))
+        self._th_pref_combo = ttk.Combobox(row1, textvariable=self._th_pref_var, state="readonly", font=("Segoe UI", 10), width=10,
+                                           values=[PREFECTURES[c] for c in sorted(PREFECTURES, key=int)])
+        self._th_pref_combo.pack(side="left", padx=(6, 0))
+        self._th_pref_combo.bind("<<ComboboxSelected>>", lambda e: self._load_theater_choices())
+        self._th_status = tk.Label(row1, text="", font=self.F["caption"], fg=C["text3"], bg=C["card"])
+        self._th_status.pack(side="right")
+        row2 = tk.Frame(inp, bg=C["card"])
+        row2.pack(fill="x")
+        tk.Label(row2, text="映画館", font=self.F["small"], fg=C["text2"], bg=C["card"], width=7, anchor="w").pack(side="left")
+        self._th_var = tk.StringVar()
+        self._th_combo = ttk.Combobox(row2, textvariable=self._th_var, state="readonly", font=("Segoe UI", 10), width=28)
+        self._th_combo.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        self._btn(row2, "追加", self._add_theater, C["accent"]).pack(side="right")
+        self._th_choices = []
+
+        tf = tk.Frame(p, bg=C["bg"])
+        tf.pack(fill="both", expand=True, padx=16, pady=(8, 4))
+        self.th_tree = ttk.Treeview(tf, style="WL.Treeview", columns=("name", "count", "updated"), show="headings", selectmode="browse")
+        self.th_tree.heading("name", text="映画館")
+        self.th_tree.heading("count", text="作品")
+        self.th_tree.heading("updated", text="更新")
+        self.th_tree.column("name", width=200, minwidth=120)
+        self.th_tree.column("count", width=50, minwidth=40, anchor="center")
+        self.th_tree.column("updated", width=120, minwidth=80)
+        self.th_tree.pack(fill="x")
+        self.th_tree.bind("<<TreeviewSelect>>", lambda e: self._refresh_theater_movies_view())
+        self.th_tree.bind("<Double-1>", self._on_th_dblclick)
+        tk.Label(tf, text="上映作品", font=self.F["caption"], fg=C["text2"], bg=C["bg"]).pack(anchor="w", pady=(8, 2))
+        self.th_mv_tree = ttk.Treeview(tf, style="WL.Treeview", columns=("status", "title", "director"), show="headings", selectmode="browse")
+        self.th_mv_tree.heading("status", text="状態")
+        self.th_mv_tree.heading("title", text="タイトル")
+        self.th_mv_tree.heading("director", text="監督")
+        self.th_mv_tree.column("status", width=70, minwidth=60, anchor="center")
+        self.th_mv_tree.column("title", width=240, minwidth=120)
+        self.th_mv_tree.column("director", width=110, minwidth=80)
+        sc = ttk.Scrollbar(tf, orient="vertical", command=self.th_mv_tree.yview)
+        self.th_mv_tree.configure(yscrollcommand=sc.set)
+        self.th_mv_tree.pack(side="left", fill="both", expand=True)
+        sc.pack(side="right", fill="y")
+        self.th_mv_tree.bind("<Double-1>", self._on_th_movie_dblclick)
+
+        bb = tk.Frame(p, bg=C["bg"])
+        bb.pack(fill="x", padx=16, pady=(4, 14))
+        self._btn(bb, "削除", self._remove_theater, C["red"]).pack(side="left", padx=(0, 8))
+        self._btn(bb, "更新", lambda: self._refresh_theater_movies(force=True), C["bg3"]).pack(side="left")
+
+    def _th_pref_code(self) -> str:
+        name = self._th_pref_var.get()
+        return next((c for c, n in PREFECTURES.items() if n == name), "13")
+
+    def _load_theater_choices(self):
+        pref = self._th_pref_code()
+        self._th_status.config(text="館の一覧を取得中…")
+
+        def work():
+            lst = fetch.theater_list_cached(pref, APP_DIR)
+            err = "" if lst else (fetch.error_text() or "取れませんでした")
+            self.root.after(0, lambda: done(lst, err))
+
+        def done(lst, err):
+            self._th_choices = lst
+            self._th_combo["values"] = [f"{t['area']}: {t['name']} ({t['count']})" for t in lst]
+            self._th_status.config(text=f"{len(lst)} 館" if lst else f"⚠ {err}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _add_theater(self):
+        i = self._th_combo.current()
+        if i < 0 or i >= len(self._th_choices):
+            messagebox.showinfo("映画館", "一覧から館を選んでください。", parent=self.root)
+            return
+        t = self._th_choices[i]
+        if any(x.get("url") == t["url"] for x in self.theater_wl):
+            self._status(f"追加済み: {t['name']}")
+            return
+        entry = {"name": t["name"], "url": t["url"], "pref": self._th_pref_code(), "area": t.get("area", ""), "movies": [], "updated": "", "error": ""}
+        self.theater_wl.append(entry)
+        save_json(THEATER_WL_FILE, self.theater_wl)
+        self._refresh_theater_wl()
+        self._status(f"追加: {t['name']}")
+        self._refresh_theater_movies(only=entry, mark_known=True)
+
+    def _remove_theater(self):
+        sel = self.th_tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx >= len(self.theater_wl):
+            return
+        name = self.theater_wl[idx]["name"]
+        if not messagebox.askyesno("削除", f"「{name}」を映画館のウォッチリストから削除しますか?", parent=self.root):
+            return
+        del self.theater_wl[idx]
+        save_json(THEATER_WL_FILE, self.theater_wl)
+        self._refresh_theater_wl()
+        self._status(f"削除: {name}")
+
+    def _refresh_theater_wl(self):
+        self.th_tree.delete(*self.th_tree.get_children())
+        for i, t in enumerate(self.theater_wl):
+            upd = t.get("updated", "")[5:] if t.get("updated") else "—"
+            if t.get("error"):
+                upd = f"⚠ {t['error']}"
+            self.th_tree.insert("", "end", iid=str(i), values=(t["name"], len(t.get("movies", [])), upd))
+        if not self.theater_wl:
+            self.th_tree.insert("", "end", iid="empty", values=("上の一覧から館を選んで追加すると、ここに並びます", "", ""))
+        if self._left_mode == "theater":
+            self.wl_cnt.config(text=f"{len(self.theater_wl)}館")
+        self._refresh_theater_movies_view()
+
+    def _refresh_theater_movies_view(self):
+        self.th_mv_tree.delete(*self.th_mv_tree.get_children())
+        sel = self.th_tree.selection()
+        if not sel or sel[0] == "empty":
+            return
+        t = self.theater_wl[int(sel[0])]
+        by_id = {info.get("movie_id"): info for info in self.now_showing.values() if info.get("movie_id")}
+        for m in t.get("movies", []):
+            info = by_id.get(str(m.get("movie_id") or ""), {})
+            self.th_mv_tree.insert("", "end", iid=f"{sel[0]}:{m.get('movie_id')}", values=("🟢 上映中", m.get("title", ""), info.get("director", "")))
+
+    def _refresh_theater_movies(self, only: dict | None = None, force: bool = False, mark_known: bool = False, then=None):
+        """登録した館の作品を取り直す (別スレッド)。force なら今日のキャッシュを捨てる。mark_known は登録の時 (全部を新着にしない)。"""
+        targets = [only] if only else list(self.theater_wl)
+        if not targets:
+            if then:
+                then()
+            return
+        if force:
+            fetch.clear_theaters_cache(APP_DIR)
+        self._th_status.config(text="館の作品を取得中…")
+
+        def work():
+            results = []
+            for t in targets:
+                movies = fetch.theater_movies_cached(t["url"], APP_DIR)
+                results.append((t, movies, "" if movies else (fetch.error_text() or "取れませんでした")))
+            self.root.after(0, lambda: done(results))
+
+        def done(results):
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            for t, movies, err in results:
+                if movies:
+                    t["movies"], t["updated"], t["error"] = movies, now, ""
+                else:
+                    t["error"] = err
+            save_json(THEATER_WL_FILE, self.theater_wl)
+            if mark_known:
+                notify.mark_known(APP_DIR, notify.showing_items([], [], dict(self.now_showing), targets))
+            self._th_status.config(text=f"{sum(len(t.get('movies', [])) for t in self.theater_wl)} 作品")
+            self._refresh_theater_wl()
+            self._filter_ns()
+            self.refresh_bar()
+            if then:
+                then()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_th_dblclick(self, event):
+        sel = self.th_tree.selection()
+        if sel and sel[0] != "empty":
+            webbrowser.open(self.theater_wl[int(sel[0])]["url"])
+
+    def _on_th_movie_dblclick(self, event):
+        sel = self.th_mv_tree.selection()
+        if not sel:
+            return
+        mid = sel[0].split(":")[-1]
+        title = self.th_mv_tree.item(sel[0], "values")[1]
+        if mid.isdigit():
+            self._theater_popup(title, mid)
 
     def _build_movie_wl_view(self, p):
         inp = tk.Frame(p, bg=C["card"], padx=14, pady=10)
@@ -896,7 +1094,8 @@ class MovieApp:
         """別スレッドから呼ぶ。kind = auto | digest | test。戻りは notify.run の物。"""
         return notify.run(self.settings, APP_DIR, list(self.watchlist), list(self.dir_watchlist), dict(self.now_showing),
                           kind=kind, theaters_fn=lambda mid, prefs: fetch_theaters_multi(mid, prefs, APP_DIR),
-                          picks_fn=lambda: self._picks_for_mail(dict(self.now_showing), list(self.watchlist), list(self.dir_watchlist)))
+                          picks_fn=lambda: self._picks_for_mail(dict(self.now_showing), list(self.watchlist), list(self.dir_watchlist), list(self.theater_wl)),
+                          theater_wl=list(self.theater_wl))
 
     def data_dir(self) -> Path:
         return APP_DIR
@@ -933,6 +1132,8 @@ class MovieApp:
             self._remove_movie()
         elif w is getattr(self, "dir_wl_tree", None):
             self._remove_dir_from_wl()
+        elif w is getattr(self, "th_tree", None):
+            self._remove_theater()
 
     def _on_escape(self, event=None):
         """一番手前の窓 (Toplevel) を閉じる。地域の窓は自分で Esc を持つ。"""
@@ -988,6 +1189,8 @@ class MovieApp:
             parts.append(m)
         else:
             parts.append("メール: 未設定")
+        if self.theater_wl:
+            parts.append(f"映画館 {len(self.theater_wl)} 館 {sum(len(x.get('movies', [])) for x in self.theater_wl)} 作品")
         t = self.taste.tally()
         glow = picks.afterglow(self.taste.feedback, self.now_showing)
         if glow:
@@ -997,11 +1200,11 @@ class MovieApp:
         self.bar_lbl.config(text="  ·  ".join(parts))
 
     # ---- 好みの学習 (MV-8) ----
-    def _picks_for_mail(self, now_showing: dict, wl: list, dwl: list):
+    def _picks_for_mail(self, now_showing: dict, wl: list, dwl: list, thw: list | None = None):
         """まとめメールの頭 (MV-10): おまかせで 3 本と余韻。self が None でも動く (--send-mail)。"""
         model = self.taste if self is not None else taste.Model(TASTE_FILE)
         today = datetime.now().strftime("%Y-%m-%d")
-        reasons = picks.wl_showing_titles(wl, dwl, now_showing)
+        reasons = picks.wl_showing_titles(wl, dwl, now_showing, thw)
         chosen = picks.choose(list(now_showing.values()), reasons, model, picks.load_dismissed(APP_DIR, today))
         return chosen, picks.afterglow(model.feedback, now_showing)
 
@@ -1217,7 +1420,7 @@ class MovieApp:
         self._on_data_ready(cache=False, ts=ts)
         if self.watchlist:
             self._do_check(silent=True)
-        self._maybe_notify()
+        self._refresh_theater_movies(then=self._maybe_notify)   # 館の作品 (MV-19) を取ってから通知
         self._schedule_update()
 
     def _on_data_ready(self, cache=False, ts=""):
@@ -1301,7 +1504,7 @@ class MovieApp:
         today = datetime.now().strftime("%Y-%m-%d")
         self._paint_moods()
         movies, note = picks.mood_filter(list(self.now_showing.values()), self._mood)
-        wl = picks.wl_showing_titles(self.watchlist, self.dir_watchlist, self.now_showing)
+        wl = picks.wl_showing_titles(self.watchlist, self.dir_watchlist, self.now_showing, self.theater_wl)
         self._picks = picks.choose(movies, wl, self.taste, picks.load_dismissed(APP_DIR, today))
         self.picks_note.config(text=note)
         for pk in self._picks:
@@ -2284,9 +2487,17 @@ def _send_mail_cli() -> int:
         _say("取得できませんでした: " + (fetch.error_text(200) or "0 件"))
         return 2
     save_json(CACHE_FILE, {"updated": datetime.now().strftime("%Y-%m-%d %H:%M"), "movies": list(now_showing.values())})
+    thw = load_json(THEATER_WL_FILE)
+    thw = thw if isinstance(thw, list) else []
+    for t in thw:                                   # 館の作品 (MV-19)。取れなければ前回のまま
+        movies = fetch.theater_movies_cached(t.get("url", ""), APP_DIR)
+        if movies:
+            t["movies"], t["updated"] = movies, datetime.now().strftime("%Y-%m-%d %H:%M")
+    if thw:
+        save_json(THEATER_WL_FILE, thw)
     r = notify.run(settings, APP_DIR, wl, dwl, now_showing, kind="auto",
                    theaters_fn=lambda mid, prefs: fetch_theaters_multi(mid, prefs, APP_DIR),
-                   picks_fn=lambda: MovieApp._picks_for_mail(None, now_showing, wl, dwl))
+                   picks_fn=lambda: MovieApp._picks_for_mail(None, now_showing, wl, dwl, thw), theater_wl=thw)
     if r.get("error"):
         _say("メール: " + r["error"])
         return 1

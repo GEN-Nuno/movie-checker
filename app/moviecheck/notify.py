@@ -77,9 +77,23 @@ def cfg_problem(cfg: dict) -> str:
 
 
 # ---- 今 🟢 の物 ----
-def showing_items(watchlist: list, dir_watchlist: list, now_showing: dict) -> list[dict]:
-    """映画 WL と監督 WL のうち、今上映中の物。{key, title, director, movie_id, url, source}。"""
+def showing_items(watchlist: list, dir_watchlist: list, now_showing: dict, theater_wl: list | None = None) -> list[dict]:
+    """映画 WL と監督 WL のうち今上映中の物 + 映画館 WL の作品 (館に掛かっている = 上映中)。{key, title, director, movie_id, url, source}。"""
     out, seen = [], set()
+    by_id_all = {info.get("movie_id"): info for info in now_showing.values() if info.get("movie_id")}
+    for th in theater_wl or []:                 # MV-19: key は 'th:<館>:<movie_id>' (館ごとに別の知らせ)
+        name = th.get("name", "")
+        for m in th.get("movies", []):
+            mid = str(m.get("movie_id") or "")
+            if not mid:
+                continue
+            key = f"th:{name}:{mid}"
+            if key in seen:
+                continue
+            seen.add(key)
+            info = by_id_all.get(mid, {})
+            out.append({"key": key, "title": m.get("title", "") or info.get("title", ""), "director": info.get("director", ""),
+                        "movie_id": mid, "url": m.get("url") or info.get("url", ""), "source": f"映画館 {name}"})
     for item in watchlist or []:
         mt = find_match(item.get("title", ""), now_showing)
         if not mt:
@@ -109,6 +123,20 @@ def showing_items(watchlist: list, dir_watchlist: list, now_showing: dict) -> li
             out.append({"key": key, "title": title, "director": name, "movie_id": info.get("movie_id", ""),
                         "url": info.get("url", ""), "source": f"監督 {name}"})
     return out
+
+
+def mark_known(data_dir: Path, items: list[dict], now: datetime | None = None) -> None:
+    """館を登録した時に、今の作品を『送った事にする』(登録の瞬間に全部が新着にならないように。MV-19)。"""
+    now = now or datetime.now()
+    state_p = Path(data_dir) / "notify_state.json"
+    state = load_json(state_p) or {}
+    if not isinstance(state, dict):
+        state = {}
+    sent = dict(state.get("sent") or {})
+    for it in items:
+        sent.setdefault(it["key"], now.strftime("%Y-%m-%d"))
+    state["sent"] = sent
+    save_json(state_p, state)
 
 
 def changes(items: list[dict], state: dict) -> list[dict]:
@@ -249,7 +277,8 @@ def send(cfg: dict, password: str, subject: str, text: str, html: str) -> str:
 
 # ---- まとめて 1 回 ----
 def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, now_showing: dict,
-        kind: str = "auto", theaters_fn=None, send_fn=None, now: datetime | None = None, picks_fn=None) -> dict:
+        kind: str = "auto", theaters_fn=None, send_fn=None, now: datetime | None = None, picks_fn=None,
+        theater_wl: list | None = None) -> dict:
     """kind: auto (変化があれば / まとめの日なら) | digest (今すぐまとめ) | test (試し)。
     戻り {sent: bool, count: int, error: str, why: str}。記録は notify_log.json、送った物は notify_state.json。"""
     now = now or datetime.now()
@@ -272,7 +301,7 @@ def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, no
     prob = cfg_problem(cfg)
     if prob:
         return record("skip", 0, "", prob) | {"error": prob}
-    items = showing_items(watchlist, dir_watchlist, now_showing)
+    items = showing_items(watchlist, dir_watchlist, now_showing, theater_wl)
     # 上映が終わった物は忘れる (また上映されたら知らせる)。取得が空の時は触らない (ネット無しで全部忘れない)
     if now_showing:
         keys = {it["key"] for it in items}

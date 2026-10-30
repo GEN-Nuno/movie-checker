@@ -166,3 +166,17 @@ def test_run_digest_calls_picks_fn_and_survives_failure(tmp_path):
     r = notify.run(settings, tmp_path, [], [], {"怪物": {"title": "怪物"}}, kind="digest", send_fn=send_fn,
                    picks_fn=lambda: ([{"movie": {"title": "怪物"}, "reason": "人気 1 位"}], "今週: 1 本に反応"))
     assert r["sent"] and sent["text"].startswith("今週: 1 本に反応") and "■ おすすめ" in sent["text"]
+
+
+# ---- MV-19: 映画館 WL の作品は上映中として並び、登録時に『既知』にできる ----
+def test_theater_wl_items_and_mark_known(tmp_path):
+    thw = [{"name": "ユーロスペース", "movies": [{"title": "A", "movie_id": "1", "url": "u1"}, {"title": "B", "movie_id": "2"}]}]
+    items = notify.showing_items([], [], {"A": {"title": "A", "movie_id": "1", "director": "D"}}, thw)
+    assert [(i["key"], i["source"], i["director"]) for i in items] == [("th:ユーロスペース:1", "映画館 ユーロスペース", "D"), ("th:ユーロスペース:2", "映画館 ユーロスペース", "")]
+    notify.mark_known(tmp_path, items)
+    state = notify.load_json(tmp_path / "notify_state.json")
+    assert set(state["sent"]) == {"th:ユーロスペース:1", "th:ユーロスペース:2"}
+    assert notify.changes(items, state) == []
+    thw[0]["movies"].append({"title": "C", "movie_id": "3"})
+    items2 = notify.showing_items([], [], {}, thw)
+    assert [i["key"] for i in notify.changes(items2, state)] == ["th:ユーロスペース:3"]

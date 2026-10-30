@@ -20,6 +20,8 @@ USER_AGENT = (
 )
 HEADERS = {"User-Agent": USER_AGENT}
 POSTER_BASE = "https://media.eiga.com/"   # ポスターはここからだけ (MV-9)
+RELEASE_PAGES = 10                          # 公開日順の全作品のページ数の上限 (MV-19)
+TOTAL_PAGES = 11 + RELEASE_PAGES            # 進捗の最大
 POSTER_MAX_BYTES = 500 * 1024
 _local = threading.local()  # thread ごとの Session (MV-5: keep-alive)
 SKIP_TEXTS = {"予告編・動画", "レビュー", "作品情報", "作品", "映画館を探す"}
@@ -197,6 +199,22 @@ def fetch_now_showing(progress_cb=None) -> list[dict]:
         movies.extend(found)
         if progress_cb:
             progress_cb(page, len(movies))
+    # MV-19: 公開日順の全作品 (/now/all/release/<p>/) も足す。ミニシアターでしか掛からない作品はここにしか無い。
+    # 1 ページ目から取れなければ人気順だけで返す (訳は立てない。全作品は補助)
+    if movies:
+        saved_error = last_error
+        for p in range(1, RELEASE_PAGES + 1):
+            url = f"{EIGA_NOW_URL}all/release/" + ("" if p == 1 else f"{p}/")
+            soup, status = _get(url, 15)
+            if soup is None:
+                break
+            found = _extract_movies(soup)
+            if not found:
+                break
+            movies.extend(found)
+            if progress_cb:
+                progress_cb(11 + p, len(movies))
+        last_error = saved_error
     seen = set()
     unique = []
     for m in movies:
@@ -306,6 +324,88 @@ def fetch_theaters_multi(movie_id: str, pref_codes: list[str], data_dir=None) ->
         if theaters:
             result[name] = theaters
     return result
+
+
+# ---- 映画館のウォッチリスト (MV-19): 都道府県の館の一覧と、館の上映作品 ----
+def fetch_theater_list(pref_code: str) -> list[dict]:
+    """/theater/<pref>/ の dl.theater-area-list から [{name, url, area, count}]。失敗は空 (last_error)。"""
+    if not _check_id(pref_code, "pref_code"):
+        return []
+    soup, status = _get(f"{EIGA_BASE}/theater/{pref_code}/", 15)
+    if soup is None:
+        return []
+    out, seen = [], set()
+    for dl in soup.select("dl.theater-area-list"):
+        h = dl.select_one("dt h3")
+        area = h.get_text(strip=True).replace("の映画館", "") if h else ""
+        for li in dl.select("dd li"):
+            a = li.select_one("a[href]")
+            if a is None:
+                continue
+            href = a.get("href", "")
+            if not re.match(r"^/theater/\d+/\d+/\d+/$", href):
+                continue
+            name = a.get_text(strip=True)
+            if not name or href in seen:
+                continue
+            seen.add(href)
+            m = re.search(r"（(\d+)）", li.get_text())
+            out.append({"name": name, "url": f"{EIGA_BASE}{href}", "area": area, "count": int(m.group(1)) if m else 0})
+    if not out:
+        _set_error("empty", "映画館の一覧が見つかりません (形が変わった?)", f"{EIGA_BASE}/theater/{pref_code}/")
+    return out
+
+
+def fetch_theater_movies(theater_url: str) -> list[dict]:
+    """館のページの div.theater-movie ul.slide-menu から上映作品 [{title, movie_id, url, image}]。失敗は空 (last_error)。"""
+    if not re.match(r"^https://eiga\.com/theater/\d+/\d+/\d+/$", theater_url or ""):
+        _set_error("http", "映画館の url の形が正しくありません", theater_url or "")
+        return []
+    soup, status = _get(theater_url, 15)
+    if soup is None:
+        return []
+    out, seen = [], set()
+    for a in soup.select("div.theater-movie ul.slide-menu li a[href^='#m']"):
+        m = re.match(r"^#m(\d+)$", a.get("href", ""))
+        img = a.select_one("img")
+        title = (img.get("alt", "") if img is not None else "").strip()
+        if not m or not title or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        src_ = (img.get("src") or "") if img is not None else ""
+        out.append({"title": title, "movie_id": m.group(1), "url": f"{EIGA_BASE}/movie/{m.group(1)}/",
+                    "image": src_ if src_.startswith(POSTER_BASE) else ""})
+    if not out:
+        _set_error("empty", "映画館のページに作品が見つかりません (形が変わった?)", theater_url)
+    return out
+
+
+def theater_list_cached(pref_code: str, data_dir, now=None) -> list[dict]:
+    return _cached(f"list/{pref_code}", lambda: fetch_theater_list(pref_code), data_dir, now)
+
+
+def theater_movies_cached(theater_url: str, data_dir, now=None) -> list[dict]:
+    return _cached(f"th/{theater_url}", lambda: fetch_theater_movies(theater_url), data_dir, now)
+
+
+def _cached(key: str, fn, data_dir, now=None) -> list:
+    """theaters_cache.json の今日の key があれば返す。無ければ fn() して (ネットの失敗と空は書かずに) 書く。"""
+    from datetime import datetime
+    from .store import save_json
+    from pathlib import Path
+    today = (now or datetime.now()).strftime("%Y-%m-%d")
+    cache = _load_theaters_cache(data_dir, today)
+    if key in cache["items"]:
+        return list(cache["items"][key])
+    got = fn()
+    if not got:
+        return got
+    cache["items"][key] = got
+    try:
+        save_json(Path(data_dir) / THEATERS_CACHE, cache)
+    except OSError:
+        pass
+    return got
 
 
 # ---- 劇場の 1 日キャッシュ (MV-11): theaters_cache.json {date, items: {"id/pref": [館]}} ----

@@ -72,7 +72,7 @@ def test_now_showing_extracts_titles_and_directors(fake):
     assert [m["title"] for m in got] == ["国宝", "ゴジラ-1.0", "鬼滅の刃"]
     assert got[0]["director"] == "李相日" and got[0]["movie_id"] == "100001"
     assert got[2]["url"] == "https://eiga.com/movie/100004/"
-    assert f.calls == ["https://eiga.com/now/all/rank/", "https://eiga.com/now/all/rank/2/"]
+    assert f.calls == ["https://eiga.com/now/all/rank/", "https://eiga.com/now/all/rank/2/", "https://eiga.com/now/all/release/"]   # MV-19: 全作品も 1 回見に行く
     assert fetch.last_error is None  # 2 ページ目の 404 は正常
 
 
@@ -197,3 +197,43 @@ def test_theaters_cached_does_not_cache_network_failure(tmp_path, fake):
     assert fetch.theaters_cached("5", "13", tmp_path) == []
     assert not (tmp_path / "theaters_cache.json").exists()
     assert len(f.calls) == 1
+
+
+# ---- MV-19: 館の一覧・館の作品・全作品の合流 ----
+THEATER_LIST_HTML = """<dl class="theater-area-list"><dt><h3>渋谷の映画館</h3></dt><dd><ul>
+<li><a href="/theater/13/130301/3028/">シアター・イメージフォーラム</a> （7）</li>
+<li><a href="/theater/13/130301/3031/">ユーロスペース</a> （14）</li><li><a href="/theater/">全部</a></li></ul></dd></dl>
+<dl class="theater-area-list"><dt><h3>新宿の映画館</h3></dt><dd><ul><li><a href="/theater/13/130401/3002/">テアトル新宿</a> （3）</li></ul></dd></dl>"""
+THEATER_PAGE_HTML = """<div class="theater-movie"><ul class="slide-menu slide-10">
+<li><a class="smooth-scroll" href="#m106743"><img alt="京都ALS患者嘱託殺人事件" src="https://media.eiga.com/images/movie/106743/photo/x/160.jpg"></a></li>
+<li><a class="smooth-scroll" href="#m105451"><img alt="もしもの愛" src="https://evil.example/x.jpg"></a></li>
+<li><a class="smooth-scroll" href="#m106743"><img alt="重複"></a></li></ul></div>"""
+
+
+def test_theater_list_and_movies(fake, tmp_path):
+    f = fake({"https://eiga.com/theater/13/": FakeResp(200, THEATER_LIST_HTML),
+              "https://eiga.com/theater/13/130301/3031/": FakeResp(200, THEATER_PAGE_HTML)})
+    lst = fetch.fetch_theater_list("13")
+    assert [(t["name"], t["area"], t["count"]) for t in lst] == [("シアター・イメージフォーラム", "渋谷", 7), ("ユーロスペース", "渋谷", 14), ("テアトル新宿", "新宿", 3)]
+    assert lst[1]["url"] == "https://eiga.com/theater/13/130301/3031/"
+    mv = fetch.fetch_theater_movies(lst[1]["url"])
+    assert [(m["title"], m["movie_id"]) for m in mv] == [("京都ALS患者嘱託殺人事件", "106743"), ("もしもの愛", "105451")]
+    assert mv[0]["image"].startswith("https://media.eiga.com/") and mv[1]["image"] == ""
+    assert fetch.fetch_theater_movies("https://evil.example/theater/13/1/1/") == [] and "url" in fetch.error_text()
+    assert fetch.fetch_theater_list("../x") == []
+    # 1 日キャッシュ
+    assert fetch.theater_list_cached("13", tmp_path) == lst and fetch.theater_list_cached("13", tmp_path) == lst
+    assert f.calls.count("https://eiga.com/theater/13/") == 2   # 1 回目 (直) + キャッシュの 1 回目
+    assert fetch.theater_movies_cached(lst[1]["url"], tmp_path) == mv and f.calls.count(lst[1]["url"]) == 2
+
+
+def test_now_showing_adds_release_pages(fake):
+    f = fake({"https://eiga.com/now/all/rank/": FakeResp(200, NOW_HTML),
+              "https://eiga.com/now/all/rank/2/": FakeResp(404, ""),
+              "https://eiga.com/now/all/release/": FakeResp(200, NOW_HTML),
+              "https://eiga.com/now/all/release/2/": FakeResp(404, "")})
+    got = fetch.fetch_now_showing()
+    titles = [m["title"] for m in got]
+    assert len(titles) == 3 and len(titles) == len(set(titles))   # 同じ 3 本が重複しない
+    assert fetch.last_error is None
+    assert "https://eiga.com/now/all/release/" in f.calls

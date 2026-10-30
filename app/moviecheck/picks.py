@@ -60,8 +60,8 @@ def word_counts(movies: list[dict], top: int = 200) -> list[tuple[str, int]]:
     return c.most_common(top)
 
 
-def wl_showing_titles(watchlist: list, dir_watchlist: list, now_showing: dict) -> dict[str, str]:
-    """今上映中の WL の題名 → 訳 (観たい映画 / 監督 ○○ の作品)。"""
+def wl_showing_titles(watchlist: list, dir_watchlist: list, now_showing: dict, theater_wl: list | None = None) -> dict[str, str]:
+    """今上映中の WL の題名 → 訳 (観たい映画 / 監督 ○○ の作品 / 映画館 ○○ で上映中)。"""
     out: dict[str, str] = {}
     for w in watchlist or []:
         mt = find_match(w.get("title", ""), now_showing)
@@ -73,6 +73,11 @@ def wl_showing_titles(watchlist: list, dir_watchlist: list, now_showing: dict) -
             t = ids.get(m.get("movie_id")) or (m.get("title") if m.get("title") in now_showing else None)
             if t:
                 out.setdefault(t, f"監督 {d.get('name', '')} の作品")
+    for th in theater_wl or []:                 # MV-19
+        for m in th.get("movies", []):
+            t = ids.get(str(m.get("movie_id") or "")) or (m.get("title") if m.get("title") in now_showing else None)
+            if t:
+                out.setdefault(t, f"映画館 {th.get('name', '')} で上映中")
     return out
 
 
