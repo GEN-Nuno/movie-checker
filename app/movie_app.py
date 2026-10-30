@@ -385,12 +385,14 @@ class MovieApp:
         self._picks = []
         self._poster_imgs = {}
         self._pick_cards = []
+        # 字体 (MV-13、HIG typography): 1 書体、4 段。細字なし。太字は見出し (h) と札の題名 (strong) だけ
         self.F = {
-            "title": tkfont.Font(family="Segoe UI", size=16, weight="bold"),
-            "h2": tkfont.Font(family="Segoe UI", size=12, weight="bold"),
-            "normal": tkfont.Font(family="Segoe UI", size=11),
-            "small": tkfont.Font(family="Segoe UI", size=10),
-            "btn": tkfont.Font(family="Segoe UI", size=10, weight="bold"),
+            "title": tkfont.Font(family="Segoe UI Semibold", size=12),
+            "h2": tkfont.Font(family="Segoe UI Semibold", size=12),
+            "strong": tkfont.Font(family="Segoe UI Semibold", size=10),
+            "normal": tkfont.Font(family="Segoe UI", size=10),
+            "small": tkfont.Font(family="Segoe UI", size=9),
+            "btn": tkfont.Font(family="Segoe UI", size=10),
             "caption": tkfont.Font(family="Segoe UI", size=9),
         }
         self._setup_styles()
@@ -407,9 +409,9 @@ class MovieApp:
         for name in ("WL.Treeview", "NS.Treeview"):
             rh = 40 if name.startswith("WL") else 34
             s.configure(name, background=C["card"], foreground=C["text"], fieldbackground=C["card"],
-                        font=("Segoe UI", 11), rowheight=rh, borderwidth=0)
+                        font=("Segoe UI", 10), rowheight=rh, borderwidth=0)
             s.configure(f"{name}.Heading", background=C["bg"], foreground=C["text2"],
-                        font=("Segoe UI", 10, "bold"), borderwidth=0, relief="flat", padding=(8, 6))
+                        font=("Segoe UI", 9), borderwidth=0, relief="flat", padding=(8, 6))
             s.map(name, background=[("selected", "#e3f0ff")], foreground=[("selected", C["accent"])])
         s.configure("Prog.Horizontal.TProgressbar", troughcolor=C["bg3"], background=C["accent"],
                     borderwidth=0, thickness=4)
@@ -417,30 +419,30 @@ class MovieApp:
         s.map("TCombobox", fieldbackground=[("readonly", C["input_bg"])], foreground=[("readonly", C["text"])])
 
     def _build_ui(self):
-        hdr = tk.Frame(self.root, bg=C["card"], pady=12)
+        hdr = tk.Frame(self.root, bg=C["card"], pady=8)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="映画上映チェッカー", font=self.F["title"], fg=C["text"], bg=C["card"]).pack(side="left", padx=20)
+        tk.Label(hdr, text="映画上映チェッカー", font=self.F["title"], fg=C["text"], bg=C["card"]).pack(side="left", padx=24)
 
         pf = tk.Frame(hdr, bg=C["card"])
-        pf.pack(side="right", padx=20)
+        pf.pack(side="right", padx=24)
         tk.Label(pf, text="地域:", font=self.F["small"], fg=C["text2"], bg=C["card"]).pack(side="left", padx=(0, 4))
         self.pref_label = tk.Label(pf, text="", font=self.F["small"], fg=C["text"], bg=C["card"])
         self.pref_label.pack(side="left", padx=(0, 8))
         tk.Button(pf, text="変更", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=self._open_region_selector).pack(side="left")
-        tk.Button(pf, text="✉ メール", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+        tk.Button(pf, text="メール", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=self._open_mail_settings).pack(side="left", padx=(8, 0))
-        tk.Button(pf, text=f"ⓘ {__version__}", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+        tk.Button(pf, text="情報", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=self._open_about).pack(side="left", padx=(8, 0))
         self._update_pref_label()
 
         self.status_lbl = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["card"])
-        self.status_lbl.pack(side="right", padx=20)
-        tk.Button(pf, text="♥ 好み", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+        self.status_lbl.pack(side="right", padx=24)
+        tk.Button(pf, text="好み", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=self._open_taste).pack(side="left", padx=(8, 0))
 
         # 状況の帯 (MV-7): 最終取得・次の自動更新・メール・好み
-        self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["text2"], bg=C["bg3"], anchor="w", padx=20, pady=3)
+        self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["text2"], bg=C["bg3"], anchor="w", padx=24, pady=4)
         self.bar_lbl.pack(fill="x")
         tk.Frame(self.root, bg=C["separator"], height=1).pack(fill="x")
 
@@ -450,13 +452,14 @@ class MovieApp:
         main.pack(fill="both", expand=True, padx=0, pady=0)
         self._main_pw = main
 
-        left = tk.Frame(main, bg=C["bg"])
-        main.add(left, width=540, minsize=400)
-        self._build_left(left)
+        # 読み順 (HIG layout): 重要な物を先頭側に。主 = おすすめ + 上映中 (左 680)、補助 = ウォッチリスト (右)
+        main_pane = tk.Frame(main, bg=C["bg"])
+        main.add(main_pane, width=680, minsize=440)
+        self._build_right(main_pane)
 
-        right = tk.Frame(main, bg=C["bg"])
-        main.add(right, minsize=400)
-        self._build_right(right)
+        side_pane = tk.Frame(main, bg=C["bg"])
+        main.add(side_pane, minsize=360)
+        self._build_left(side_pane)
 
     def _build_left(self, p):
         self._left_panel = p
@@ -465,11 +468,11 @@ class MovieApp:
         tab_bar = tk.Frame(p, bg=C["bg"])
         tab_bar.pack(fill="x", padx=10, pady=(10, 0))
         self._ltab_btn_movie = tk.Button(
-            tab_bar, text="📋 映画WL", font=self.F["btn"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
+            tab_bar, text="映画", font=self.F["btn"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
             padx=14, pady=3, command=lambda: self._switch_left_tab("movie"))
         self._ltab_btn_movie.pack(side="left")
         self._ltab_btn_dir = tk.Button(
-            tab_bar, text="🎬 監督WL", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+            tab_bar, text="監督", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
             padx=14, pady=3, command=lambda: self._switch_left_tab("director"))
         self._ltab_btn_dir.pack(side="left", padx=(2, 0))
         self.wl_cnt = tk.Label(tab_bar, text="0件", font=self.F["small"], fg=C["text3"], bg=C["bg"])
@@ -477,6 +480,7 @@ class MovieApp:
         self.wl_hint = tk.Label(tab_bar, text="ダブルクリックで劇場検索", font=self.F["small"], fg=C["text3"], bg=C["bg"])
         self.wl_hint.pack(side="right", padx=(0, 8))
 
+        tk.Label(tab_bar, text="ウォッチリスト", font=self.F["h2"], fg=C["text"], bg=C["bg"]).pack(side="left", padx=(0, 16), before=self._ltab_btn_movie)
         self._movie_wl_frame = tk.Frame(p, bg=C["bg"])
         self._build_movie_wl_view(self._movie_wl_frame)
         self._dir_wl_frame = tk.Frame(p, bg=C["bg"])
@@ -554,7 +558,7 @@ class MovieApp:
         bb = tk.Frame(p, bg=C["bg"])
         bb.pack(fill="x", padx=16, pady=(4, 14))
         self._btn(bb, "削除", self._remove_movie, C["red"]).pack(side="left", padx=(0, 8))
-        self._btn(bb, "上映チェック", self._check_status, C["green"]).pack(side="left")
+        self._btn(bb, "上映チェック", self._check_status, C["accent"]).pack(side="left")
         self._btn(bb, "eiga.com", lambda: webbrowser.open("https://eiga.com/now/"), C["bg3"]).pack(side="right")
 
     def _build_dir_wl_view(self, p):
@@ -603,15 +607,15 @@ class MovieApp:
         bb = tk.Frame(p, bg=C["bg"])
         bb.pack(fill="x", padx=16, pady=(4, 14))
         self._btn(bb, "監督を削除", self._remove_dir_from_wl, C["red"]).pack(side="left", padx=(0, 8))
-        self._btn(bb, "上映チェック", self._check_dir_wl_status, C["green"]).pack(side="left")
-        self._btn(bb, "劇場を探す", self._theater_for_dir_wl, C["blue"]).pack(side="left", padx=(8, 0))
+        self._btn(bb, "上映チェック", self._check_dir_wl_status, C["accent"]).pack(side="left")
+        self._btn(bb, "劇場", self._theater_for_dir_wl, C["bg3"]).pack(side="left", padx=(8, 0))
         self._btn(bb, "作品再取得", self._refetch_dir_filmography, C["bg3"]).pack(side="right")
 
     def _build_right(self, p):
         self._build_picks(p)
         hdr = tk.Frame(p, bg=C["bg"])
-        hdr.pack(fill="x", padx=16, pady=(14, 0))
-        tk.Label(hdr, text="上映中 / 監督検索", font=self.F["h2"], fg=C["text"], bg=C["bg"]).pack(side="left")
+        hdr.pack(fill="x", padx=16, pady=(16, 0))
+        tk.Label(hdr, text="上映中", font=self.F["h2"], fg=C["text"], bg=C["bg"]).pack(side="left")
         self.ns_upd = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["bg"])
         self.ns_upd.pack(side="right")
         self.ns_cnt = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["bg"])
@@ -628,7 +632,7 @@ class MovieApp:
         se.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 8))
         self._placeholder(se, "タイトルまたは監督名で検索...")
         self.search_entry = se
-        self._btn(sf, "手動取得", self._fetch_movies, C["bg3"]).pack(side="right")
+        self._btn(sf, "更新", self._fetch_movies, C["bg3"]).pack(side="right")
         self.sort_btn = self._btn(sf, "おすすめ順", self._toggle_ns_sort, C["bg3"])
         self.sort_btn.pack(side="right", padx=(0, 8))
 
@@ -655,8 +659,8 @@ class MovieApp:
 
         bb = tk.Frame(p, bg=C["bg"])
         bb.pack(fill="x", padx=16, pady=(4, 14))
-        self._btn(bb, "ウォッチリストに追加", self._add_from_ns, C["accent"]).pack(side="left")
-        self._btn(bb, "劇場を探す", self._theater_for_ns, C["blue"]).pack(side="left", padx=(8, 0))
+        self._btn(bb, "追加", self._add_from_ns, C["accent"]).pack(side="left")
+        self._btn(bb, "劇場", self._theater_for_ns, C["bg3"]).pack(side="left", padx=(8, 0))
 
     def _btn(self, parent, text, cmd, bg):
         fg = "white" if bg not in (C["bg3"],) else C["text2"]
@@ -920,13 +924,13 @@ class MovieApp:
                 m += f" / 次のまとめ {nd.strftime('%m/%d')} ({notify.WEEKDAYS[nd.weekday()]}) {nd.hour} 時"
             parts.append(m)
         else:
-            parts.append("メール: 未設定 (✉ メール で設定)")
+            parts.append("メール: 未設定")
         t = self.taste.tally()
         glow = picks.afterglow(self.taste.feedback, self.now_showing)
         if glow:
             parts.append(glow)
         else:
-            parts.append(f"好み: 👍{t['up']} 👎{t['down']}" if t["n"] else "好み: まだ学んでいない (WL に入れる・札の手・右クリック)")
+            parts.append(f"好み: 反応 {t['n']}" if t["n"] else "好み: まだ学んでいない")
         self.bar_lbl.config(text="  ·  ".join(parts))
 
     # ---- 好みの学習 (MV-8) ----
@@ -945,13 +949,13 @@ class MovieApp:
         self.taste.feedback_on(movie, kind, rank)
         self._filter_ns()
         self.refresh_bar()
-        self._status(f"♥ 学びました: 「{movie.get('title', '')}」{taste.LABELS[kind]}")
+        self._status(f"学習: 「{movie.get('title', '')}」{taste.LABELS[kind]}")
 
     def _toggle_ns_sort(self):
         self._ns_sort = "taste" if self._ns_sort == "rank" else "rank"
         self.sort_btn.config(text="人気順" if self._ns_sort == "taste" else "おすすめ順")
         if self._ns_sort == "taste" and not self.taste.learned():
-            self._status("♥ まだ学んでいません (WL に入れる・右クリックで 👍 👎)")
+            self._status("まだ学んでいません。追加か右クリックで反応を")
         self._filter_ns()
 
     def _on_ns_select(self, event=None):
@@ -960,7 +964,7 @@ class MovieApp:
             return
         s = self._ns_scores[sel[0]]
         if s.get("why"):
-            self._status(f"♥ なぜ: {s['why']} (点 {s['score']:+.1f})")
+            self._status(f"理由: {s['why']} ({s['score']:+.1f})")
 
     def _on_ns_rclick(self, event):
         iid = self.ns_tree.identify_row(event.y)
@@ -970,11 +974,11 @@ class MovieApp:
         title, info, is_ns = self._get_ns_item_info(iid)
         movie = {"title": title, "director": info.get("director", "")}
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label="➕ ウォッチリストに追加", command=self._add_from_ns)
+        menu.add_command(label="追加", command=self._add_from_ns)
         menu.add_separator()
-        menu.add_command(label="👍 観た: 良かった", command=lambda: self._taste_feedback(movie, "good"))
-        menu.add_command(label="👎 観た: いまいち", command=lambda: self._taste_feedback(movie, "bad"))
-        menu.add_command(label="🚫 興味なし", command=lambda: self._taste_feedback(movie, "skip"))
+        menu.add_command(label="観た: 良かった", command=lambda: self._taste_feedback(movie, "good"))
+        menu.add_command(label="観た: いまいち", command=lambda: self._taste_feedback(movie, "bad"))
+        menu.add_command(label="興味なし", command=lambda: self._taste_feedback(movie, "skip"))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1177,21 +1181,17 @@ class MovieApp:
     # ---- 今夜のあなたに (MV-9: 景色・行動・余韻) ----
     def _build_picks(self, p):
         self.picks_frame = tk.Frame(p, bg=C["bg"])
-        self.picks_frame.pack(fill="x", padx=16, pady=(12, 0))
+        self.picks_frame.pack(fill="x", padx=16, pady=(16, 0))
         top = tk.Frame(self.picks_frame, bg=C["bg"])
         top.pack(fill="x")
-        tk.Label(top, text="今夜のあなたに", font=self.F["h2"], fg=C["text"], bg=C["bg"]).pack(side="left")
-        self.picks_toggle = tk.Button(top, text="▲ 札を隠す", font=self.F["caption"], bg=C["bg"], fg=C["text3"], relief="flat", bd=0, cursor="hand2", command=self._toggle_picks)
+        tk.Label(top, text="おすすめ", font=self.F["h2"], fg=C["text"], bg=C["bg"]).pack(side="left")
+        self.picks_toggle = tk.Button(top, text="隠す", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=12, pady=4, cursor="hand2", command=self._toggle_picks)
         self.picks_toggle.pack(side="right")
-        mf = tk.Frame(self.picks_frame, bg=C["bg"])
-        mf.pack(fill="x", pady=(2, 0))
-        tk.Label(mf, text="今日はどんな気分?", font=self.F["caption"], fg=C["text2"], bg=C["bg"]).pack(side="left", padx=(0, 4))
-        self.mood_btns = {}
-        for mood in picks.MOODS:
-            b = tk.Button(mf, text=mood, font=self.F["caption"], relief="flat", bd=0, cursor="hand2", padx=8, pady=2,
-                          command=lambda m=mood: self._set_mood(m))
-            b.pack(side="left", padx=1)
-            self.mood_btns[mood] = b
+        # 気分はポップアップ (段階的に見せる)。項目に件数
+        self.mood_menu = tk.Menu(self.root, tearoff=0, font=self.F["btn"])
+        self.mood_btn = tk.Menubutton(top, text="気分: おまかせ", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=12, pady=4,
+                                      cursor="hand2", menu=self.mood_menu, direction="below")
+        self.mood_btn.pack(side="right", padx=(0, 8))
         self._paint_moods()
         self.picks_note = tk.Label(self.picks_frame, text="", font=self.F["caption"], fg=C["text3"], bg=C["bg"], anchor="w")
         self.picks_note.pack(fill="x")
@@ -1199,16 +1199,17 @@ class MovieApp:
         self.cards_frame.pack(fill="x", pady=(4, 0))
         if self.settings.get("picks_hidden"):
             self.cards_frame.pack_forget()
-            self.picks_toggle.config(text="▼ 札を出す")
+            self.picks_toggle.config(text="表示")
 
     def _paint_moods(self):
         counts = picks.mood_counts(list(self.now_showing.values())) if self.now_showing else {}
-        for mood, b in self.mood_btns.items():
-            on = mood == self._mood
+        self.mood_menu.delete(0, "end")
+        for mood in picks.MOODS:
             n = counts.get(mood)
-            label = mood if (n is None or mood == "おまかせ") else f"{mood} {n}"
-            fg = "white" if on else (C["text3"] if n == 0 else C["text2"])
-            b.config(text=label, bg=C["accent"] if on else C["bg3"], fg=fg)
+            label = mood if n is None else f"{mood}  {n}"
+            self.mood_menu.add_command(label=label, command=lambda m=mood: self._set_mood(m), state="disabled" if n == 0 else "normal")
+        n = counts.get(self._mood)
+        self.mood_btn.config(text=f"気分: {self._mood}" + (f" {n}" if n is not None and self._mood != "おまかせ" else ""))
 
     def _set_mood(self, mood: str):
         self._mood = mood
@@ -1219,10 +1220,10 @@ class MovieApp:
         hidden = self.cards_frame.winfo_manager() != ""
         if hidden:
             self.cards_frame.pack_forget()
-            self.picks_toggle.config(text="▼ 札を出す")
+            self.picks_toggle.config(text="表示")
         else:
             self.cards_frame.pack(fill="x", pady=(4, 0))
-            self.picks_toggle.config(text="▲ 札を隠す")
+            self.picks_toggle.config(text="隠す")
         self.settings["picks_hidden"] = hidden
         self.save_settings()
 
@@ -1246,18 +1247,18 @@ class MovieApp:
 
     def _make_card(self, pk: dict) -> dict:
         m = pk["movie"]
-        card = tk.Frame(self.cards_frame, bg=C["card"], padx=8, pady=6, highlightthickness=1, highlightbackground=C["border"])
-        card.pack(fill="x", pady=(0, 4))
+        card = tk.Frame(self.cards_frame, bg=C["card"], padx=8, pady=8, highlightthickness=1, highlightbackground=C["border"])
+        card.pack(fill="x", pady=(0, 8))
         poster = tk.Label(card, text="", width=11, height=4, bg=C["bg3"], fg=C["text3"], font=self.F["caption"], cursor="hand2")
         poster.pack(side="left", padx=(0, 10))
         bf = tk.Frame(card, bg=C["card"])
         bf.pack(side="right", padx=(8, 0))
         body = tk.Frame(card, bg=C["card"])
         body.pack(side="left", fill="both", expand=True)
-        title = tk.Label(body, text=m.get("title", ""), font=self.F["btn"], fg=C["text"], bg=C["card"], anchor="w", justify="left", wraplength=300, cursor="hand2")
+        title = tk.Label(body, text=m.get("title", ""), font=self.F["strong"], fg=C["text"], bg=C["card"], anchor="w", justify="left", wraplength=360, cursor="hand2")
         title.pack(anchor="w")
         sub = (m.get("director") or "監督 —") + "  ·  " + pk["reason"]
-        tk.Label(body, text=sub, font=self.F["caption"], fg=C["accent"] if pk["kind"] != "rank" else C["text2"], bg=C["card"], anchor="w", wraplength=300, justify="left").pack(anchor="w")
+        tk.Label(body, text=sub, font=self.F["caption"], fg=C["text2"], bg=C["card"], anchor="w", wraplength=360, justify="left").pack(anchor="w")
         theater = tk.Label(body, text="📍 …", font=self.F["caption"], fg=C["text3"], bg=C["card"], anchor="w", wraplength=300, justify="left")
         theater.pack(anchor="w")
         mark = tk.Label(bf, text="", font=self.F["caption"], fg=C["green"], bg=C["card"])
@@ -1428,6 +1429,8 @@ class MovieApp:
     # ---- 左: 映画のウォッチリスト ----
     def _refresh_wl(self):
         self.wl_tree.delete(*self.wl_tree.get_children())
+        if not self.watchlist:   # 空の画面には次の一手 (HIG writing)
+            self.wl_tree.insert("", "end", values=("", "観たい映画を追加すると、上映中かどうかをここで知らせます", "", ""))
         for item in self.watchlist:
             st = item.get("status", "⏳ 未チェック")
             director = item.get("director", "")
@@ -1922,7 +1925,7 @@ class MovieApp:
             })
         save_json(WATCHLIST_FILE, self.watchlist)
         self._refresh_wl()
-        self._status(f"✅「{title}」をウォッチリストに追加")
+        self._status(f"追加: 「{title}」")
         self._taste_feedback({"title": title, "director": director}, "wl")
 
     # ---- 上映チェック (映画 WL) ----
