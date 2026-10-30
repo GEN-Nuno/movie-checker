@@ -74,8 +74,14 @@ if (-not (Test-Path $exeOne)) { throw "onefile の exe が無い: $exeOne" }
 if (-not (Test-Path $exeDir)) { throw "onedir の exe が無い: $exeDir" }
 
 Write-Host "== 5/6 Inno Setup"
-& $iscc "/DAppVersion=$Version" "/Q" (Join-Path $PSScriptRoot "installer.iss")
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw "Inno Setup が失敗しました" }
+# 110 (EndUpdateResource) はアンチウイルスとの競合で、数秒待って同じ事をやり直すと通る (moviAI / Master で踏んだ)
+foreach ($try in 1..3) {
+    & $iscc "/DAppVersion=$Version" "/Q" (Join-Path $PSScriptRoot "installer.iss")
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $setup)) { break }
+    Write-Host "   Inno Setup が失敗 ($try 回目)。10 秒待ってやり直す" -ForegroundColor Yellow
+    Start-Sleep -Seconds 10
+}
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw "Inno Setup が 3 回失敗しました (110 ならアンチウイルスの除外に dist を足す)" }
 
 Write-Host "== 6/6 記録"
 $sizeOne = (Get-Item $exeOne).Length
