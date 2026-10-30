@@ -1,9 +1,8 @@
 """データの置き場 (MV-4)。
 
 - 源から動かす: .py の隣 (今までどおり)。
-- exe: 隣に watchlist.json か settings.json があれば隣 (OneDrive で持ち運ぶ人)。
-  無ければ %APPDATA%\\映画チェッカー (インストール版。無ければ作る)。
-- 初回 (置き場が空) に、以前の exe の隣の json を写せる (import_from)。元は消さない。
+- exe: 常に %APPDATA%\\映画チェッカー (無ければ作る。APPDATA が無い・書けない時だけ exe の隣)。MV-16 で隣の json があっても隣は使わない。
+- 初回 (置き場に DATA_FILES が 1 つも無い) に exe の隣の json があれば黙って写す (import_from)。元は消さない。
 """
 from __future__ import annotations
 
@@ -23,8 +22,6 @@ def data_dir(app_dir: Path, frozen: bool, appdata: str | None = None) -> Path:
     app_dir = Path(app_dir)
     if not frozen:
         return app_dir
-    if any((app_dir / m).exists() for m in _MARKERS):
-        return app_dir
     base = appdata if appdata is not None else os.environ.get("APPDATA", "")
     if not base:
         return app_dir
@@ -37,8 +34,12 @@ def data_dir(app_dir: Path, frozen: bool, appdata: str | None = None) -> Path:
 
 
 def is_empty(d: Path) -> bool:
-    """まだ何も置いていない (watchlist / settings が無い)。"""
-    return not any((Path(d) / m).exists() for m in _MARKERS)
+    """まだ何も置いていない (DATA_FILES が 1 つも無い)。MV-16: 監督 WL だけある人を『空』と言わない。"""
+    return not any((Path(d) / n).exists() for n in DATA_FILES)
+
+
+def has_data(d: Path) -> bool:
+    return not is_empty(d)
 
 
 def import_from(src: Path, dst: Path) -> tuple[list[str], list[str]]:

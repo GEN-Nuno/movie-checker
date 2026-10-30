@@ -8,9 +8,15 @@ def test_source_run_uses_py_dir(tmp_path):
     assert paths.data_dir(tmp_path, frozen=False, appdata=str(tmp_path / "ad")) == tmp_path
 
 
-def test_frozen_with_json_beside_exe_stays_portable(tmp_path):
+def test_frozen_always_uses_appdata_even_with_json_beside_exe(tmp_path):
     (tmp_path / "watchlist.json").write_text("[]", encoding="utf-8")
-    assert paths.data_dir(tmp_path, frozen=True, appdata=str(tmp_path / "ad")) == tmp_path
+    assert paths.data_dir(tmp_path, frozen=True, appdata=str(tmp_path / "ad")) == tmp_path / "ad" / paths.APP_NAME
+
+
+def test_is_empty_counts_any_data_file(tmp_path):
+    assert paths.is_empty(tmp_path)
+    (tmp_path / "director_watchlist.json").write_text("[]", encoding="utf-8")
+    assert not paths.is_empty(tmp_path) and paths.has_data(tmp_path)
 
 
 def test_frozen_without_json_goes_to_appdata_and_creates_it(tmp_path):

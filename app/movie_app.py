@@ -23,7 +23,7 @@ import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 from moviecheck import fetch, notify, paths, picks, store, taste
 try:  # ポスター (MV-9)。無ければ灰色の枠
@@ -70,16 +70,19 @@ REGION_GROUPS = [
 ]
 
 # ---- 色 ----
+# 色の役割 (MV-18、apple.com の型): 黒いヘッダと帯、白い段、薄灰の札と箱、青は操作だけ、緑は上映中の印、赤は削除と失敗
 C = {
-    "bg": "#f5f5f7", "bg2": "#ffffff", "bg3": "#e8e8ed",
-    "surface": "#ffffff", "overlay": "#d1d1d6",
-    "text": "#1d1d1f", "text2": "#6e6e73", "text3": "#aeaeb2",
-    "red": "#ff3b30", "green": "#34c759", "yellow": "#ffcc00",
-    "blue": "#007aff", "mauve": "#af52de", "pink": "#ff2d55",
+    "hdr_bg": "#1d1d1f", "hdr_fg": "#f5f5f7", "hdr_fg2": "#a1a1a6", "hdr_btn": "#2c2c2e",
+    "bar_bg": "#2c2c2e", "bar_fg": "#a1a1a6",
+    "bg": "#ffffff", "bg2": "#ffffff", "bg3": "#e8e8ed",
+    "surface": "#ffffff", "overlay": "#d2d2d7",
+    "text": "#1d1d1f", "text2": "#6e6e73", "text3": "#86868b",
+    "red": "#e30000", "green": "#1d9a4b", "yellow": "#ffcc00",
+    "blue": "#0071e3", "mauve": "#af52de", "pink": "#ff2d55",
     "teal": "#5ac8fa", "peach": "#ff9500",
-    "accent": "#007aff",
-    "accent_hover": "#0051a8", "input_bg": "#ffffff", "border": "#d1d1d6",
-    "card": "#ffffff", "card_alt": "#f9f9fb", "separator": "#c6c6c8",
+    "accent": "#0071e3",
+    "accent_hover": "#0077ed", "input_bg": "#ffffff", "border": "#d2d2d7",
+    "card": "#f5f5f7", "card_alt": "#fbfbfd", "separator": "#d2d2d7",
 }
 
 
@@ -393,8 +396,8 @@ class MovieApp:
         self._pick_cards = []
         # 字体 (MV-13、HIG typography): 1 書体、4 段。細字なし。太字は見出し (h) と札の題名 (strong) だけ
         self.F = {
-            "title": tkfont.Font(family="Segoe UI Semibold", size=12),
-            "h2": tkfont.Font(family="Segoe UI Semibold", size=12),
+            "title": tkfont.Font(family="Segoe UI Semibold", size=14),
+            "h2": tkfont.Font(family="Segoe UI Semibold", size=16),
             "strong": tkfont.Font(family="Segoe UI Semibold", size=10),
             "normal": tkfont.Font(family="Segoe UI", size=10),
             "small": tkfont.Font(family="Segoe UI", size=9),
@@ -415,9 +418,9 @@ class MovieApp:
         s.theme_use("clam")
         for name in ("WL.Treeview", "NS.Treeview"):
             rh = 40 if name.startswith("WL") else 34
-            s.configure(name, background=C["card"], foreground=C["text"], fieldbackground=C["card"],
+            s.configure(name, background=C["bg"], foreground=C["text"], fieldbackground=C["bg"],
                         font=("Segoe UI", 10), rowheight=rh, borderwidth=0)
-            s.configure(f"{name}.Heading", background=C["bg"], foreground=C["text2"],
+            s.configure(f"{name}.Heading", background=C["card"], foreground=C["text2"],
                         font=("Segoe UI", 9), borderwidth=0, relief="flat", padding=(8, 6))
             s.map(name, background=[("selected", "#e3f0ff")], foreground=[("selected", C["accent"])])
         s.configure("Prog.Horizontal.TProgressbar", troughcolor=C["bg3"], background=C["accent"],
@@ -426,32 +429,33 @@ class MovieApp:
         s.map("TCombobox", fieldbackground=[("readonly", C["input_bg"])], foreground=[("readonly", C["text"])])
 
     def _build_ui(self):
-        hdr = tk.Frame(self.root, bg=C["card"], pady=8)
+        # ヘッダ (MV-18): 黒地に白い題名、操作は字だけの薄灰のボタン
+        hdr = tk.Frame(self.root, bg=C["hdr_bg"], pady=10)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="映画上映チェッカー", font=self.F["title"], fg=C["text"], bg=C["card"]).pack(side="left", padx=24)
+        tk.Label(hdr, text="映画上映チェッカー", font=self.F["title"], fg=C["hdr_fg"], bg=C["hdr_bg"]).pack(side="left", padx=24)
 
-        pf = tk.Frame(hdr, bg=C["card"])
+        pf = tk.Frame(hdr, bg=C["hdr_bg"])
         pf.pack(side="right", padx=24)
-        tk.Label(pf, text="地域:", font=self.F["small"], fg=C["text2"], bg=C["card"]).pack(side="left", padx=(0, 4))
-        self.pref_label = tk.Label(pf, text="", font=self.F["small"], fg=C["text"], bg=C["card"])
+
+        def hbtn(text, cmd):
+            return tk.Button(pf, text=text, font=self.F["btn"], bg=C["hdr_bg"], fg=C["hdr_fg2"], activebackground=C["hdr_btn"], activeforeground=C["hdr_fg"],
+                             relief="flat", cursor="hand2", padx=10, pady=3, bd=0, command=cmd)
+
+        tk.Label(pf, text="地域", font=self.F["small"], fg=C["hdr_fg2"], bg=C["hdr_bg"]).pack(side="left", padx=(0, 4))
+        self.pref_label = tk.Label(pf, text="", font=self.F["small"], fg=C["hdr_fg"], bg=C["hdr_bg"])
         self.pref_label.pack(side="left", padx=(0, 8))
-        tk.Button(pf, text="変更", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
-                  padx=10, pady=3, bd=0, command=self._open_region_selector).pack(side="left")
-        tk.Button(pf, text="メール", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
-                  padx=10, pady=3, bd=0, command=self._open_mail_settings).pack(side="left", padx=(8, 0))
-        tk.Button(pf, text="情報", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
-                  padx=10, pady=3, bd=0, command=self._open_about).pack(side="left", padx=(8, 0))
+        hbtn("変更", self._open_region_selector).pack(side="left")
+        hbtn("メール", self._open_mail_settings).pack(side="left", padx=(8, 0))
+        hbtn("好み", self._open_taste).pack(side="left", padx=(8, 0))
+        hbtn("情報", self._open_about).pack(side="left", padx=(8, 0))
         self._update_pref_label()
 
-        self.status_lbl = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["card"])
+        self.status_lbl = tk.Label(hdr, text="", font=self.F["caption"], fg=C["hdr_fg2"], bg=C["hdr_bg"])
         self.status_lbl.pack(side="right", padx=24)
-        tk.Button(pf, text="好み", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
-                  padx=10, pady=3, bd=0, command=self._open_taste).pack(side="left", padx=(8, 0))
 
-        # 状況の帯 (MV-7): 最終取得・次の自動更新・メール・好み
-        self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["text2"], bg=C["bg3"], anchor="w", padx=24, pady=4)
+        # 状況の帯 (MV-7): 濃い灰に薄灰の字
+        self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["bar_fg"], bg=C["bar_bg"], anchor="w", padx=24, pady=4)
         self.bar_lbl.pack(fill="x")
-        tk.Frame(self.root, bg=C["separator"], height=1).pack(fill="x")
 
         self.progress = ttk.Progressbar(self.root, style="Prog.Horizontal.TProgressbar", mode="determinate", maximum=11)
 
@@ -728,17 +732,15 @@ class MovieApp:
         win.geometry(f"+{x}+{y}")
 
     def _maybe_import_old_data(self):
-        """初回 (置き場が空) に、以前の exe の隣の json を取り込むか聞く。元は消さない。源から動かす時は聞かない。"""
-        if not _FROZEN or APP_DIR == EXE_DIR or not paths.is_empty(APP_DIR):
+        """初回 (置き場に json が 1 つも無い) に exe の隣の json があれば黙って写す (MV-16)。問いは出さない。元は消さない。"""
+        was_empty = paths.is_empty(APP_DIR)      # settings.json を書く前に見る (書くと空でなくなる)
+        if not SETTINGS_FILE.exists():           # 置き場が決まった印 (次回から『初回』にならない)
+            self.save_settings()
+        if not _FROZEN or APP_DIR == EXE_DIR or not was_empty:
             return
-        if not messagebox.askyesno("以前のデータ", "まだ観たい映画のデータがありません。\n以前の 映画チェッカー.exe の隣にある json (watchlist.json など) を取り込みますか?\n\n取り込み先: " + str(APP_DIR), parent=self.root):
-            self._status(f"置き場: {APP_DIR}")
+        if not any((EXE_DIR / n).is_file() for n in paths.DATA_FILES):
             return
-        d = filedialog.askdirectory(title="以前の 映画チェッカー.exe があるフォルダ", parent=self.root)
-        if not d:
-            self._status(f"置き場: {APP_DIR}")
-            return
-        copied, notes = paths.import_from(Path(d), APP_DIR)
+        copied, notes = paths.import_from(EXE_DIR, APP_DIR)
         if copied:
             self.watchlist = load_json(WATCHLIST_FILE)
             self.dir_watchlist = load_json(DIR_WL_FILE)
@@ -747,11 +749,12 @@ class MovieApp:
                 self.settings["pref_codes"] = ["13"]
             self._update_pref_label()
             self._refresh_wl()
-        msg = f"{len(copied)} 件を取り込みました ({', '.join(copied)})" if copied else "取り込める json がありませんでした"
+        msg = f"取り込み: {len(copied)} 件 (exe の隣から)" if copied else "取り込み: 無し"
         if notes:
             msg += " / " + " / ".join(notes)
-        self._status(("✅ " if copied else "⚠ ") + msg)
-        messagebox.showinfo("以前のデータ", msg, parent=self.root)  # 状態欄は直後の取得で上書きされるので窓でも出す
+        self._status(msg)
+        if copied:
+            self.save_settings()
 
     def _show_store_notes(self):
         """json が壊れていて退避から戻した等の訳 (moviecheck.store) を状態欄に。"""
@@ -765,7 +768,7 @@ class MovieApp:
         return fetch.error_text()
 
     def _status(self, msg):
-        self.status_lbl.config(text=msg)
+        self.status_lbl.config(text=msg, fg=C["hdr_fg"] if msg.startswith("⚠") else C["hdr_fg2"])
         self.root.update_idletasks()
 
     def _show_progress(self, show=True):
@@ -1309,7 +1312,7 @@ class MovieApp:
         m = pk["movie"]
         card = tk.Frame(self.cards_frame, bg=C["card"], padx=8, pady=8, highlightthickness=1, highlightbackground=C["border"])
         card.pack(fill="x", pady=(0, 8))
-        poster = tk.Label(card, text="", width=11, height=4, bg=C["bg3"], fg=C["text3"], font=self.F["caption"], cursor="hand2")
+        poster = tk.Label(card, text="…" if m.get("image") else "写真なし", width=11, height=4, bg=C["bg3"], fg=C["text3"], font=self.F["caption"], cursor="hand2")
         poster.pack(side="left", padx=(0, 10))
         bf = tk.Frame(card, bg=C["card"])
         bf.pack(side="right", padx=(8, 0))
@@ -1361,6 +1364,7 @@ class MovieApp:
                 c["theater"].config(text=f"📍 {theater_name}")
             else:
                 c["theater"].config(text="📍 —")
+            shown = False
             if path and Image is not None:
                 try:
                     img = Image.open(path)
@@ -1368,8 +1372,11 @@ class MovieApp:
                     ph = ImageTk.PhotoImage(img)
                     self._poster_imgs[m.get("movie_id")] = ph
                     c["poster"].config(image=ph, text="", width=img.width, height=img.height)
-                except Exception:  # noqa: BLE001 — 壊れた jpg 等は灰色のまま
+                    shown = True
+                except Exception:  # noqa: BLE001 — 壊れた jpg 等
                     pass
+            if not shown:
+                c["poster"].config(text="写真なし")   # MV-17: 無い事が分かるように
 
     def _pick_want(self, m: dict, mark):
         title, director = m.get("title", ""), m.get("director", "")
