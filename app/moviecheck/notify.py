@@ -146,8 +146,8 @@ def build_message(new_items: list[dict], all_items: list[dict], pref_codes: list
             tl.append(glow)
             hl.append(f"<p><b>{htmlmod.escape(glow)}</b></p>")
         if picks:
-            tl.append("■ 今夜のあなたに")
-            hl.append("<h3>今夜のあなたに</h3><ul>")
+            tl.append("■ おすすめ")
+            hl.append("<h3>おすすめ</h3><ul>")
             for pk in picks:
                 m = pk.get("movie") or {}
                 d = f"（{m['director']}）" if m.get("director") else ""

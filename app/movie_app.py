@@ -1178,7 +1178,7 @@ class MovieApp:
         save_json(CACHE_FILE, {"updated": ts, "movies": list(self.now_showing.values())})
         fetch.prune_posters(POSTERS_DIR, [m.get("movie_id") for m in self.now_showing.values()])
 
-    # ---- 今夜のあなたに (MV-9: 景色・行動・余韻) ----
+    # ---- おすすめ (MV-9: 景色・行動・余韻) ----
     def _build_picks(self, p):
         self.picks_frame = tk.Frame(p, bg=C["bg"])
         self.picks_frame.pack(fill="x", padx=16, pady=(16, 0))
