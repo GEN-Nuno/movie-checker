@@ -1,4 +1,4 @@
-"""『今夜のあなたに』の選び方 (MV-9)。ネット不要。"""
+"""『おすすめ』の選び方 (MV-9)。ネット不要。"""
 import random
 from datetime import datetime
 
