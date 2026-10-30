@@ -18,6 +18,7 @@ eiga.com から現在上映中の映画を取得し、ウォッチリストと�
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from datetime import datetime, timedelta
@@ -71,20 +72,60 @@ REGION_GROUPS = [
 ]
 
 # ---- 色 ----
-# 色の役割 (MV-18、apple.com の型): 黒いヘッダと帯、白い段、薄灰の札と箱、青は操作だけ、緑は上映中の印、赤は削除と失敗
-C = {
-    "hdr_bg": "#1d1d1f", "hdr_fg": "#f5f5f7", "hdr_fg2": "#a1a1a6", "hdr_btn": "#2c2c2e",
-    "bar_bg": "#2c2c2e", "bar_fg": "#a1a1a6",
-    "bg": "#ffffff", "bg2": "#ffffff", "bg3": "#e8e8ed",
-    "surface": "#ffffff", "overlay": "#d2d2d7",
-    "text": "#1d1d1f", "text2": "#6e6e73", "text3": "#86868b",
-    "red": "#e30000", "green": "#1d9a4b", "yellow": "#ffcc00",
-    "blue": "#0071e3", "mauve": "#af52de", "pink": "#ff2d55",
-    "teal": "#5ac8fa", "peach": "#ff9500",
-    "accent": "#0071e3",
-    "accent_hover": "#0077ed", "input_bg": "#ffffff", "border": "#d2d2d7",
-    "card": "#f5f5f7", "card_alt": "#fbfbfd", "separator": "#d2d2d7",
+# 色の役割 (MV-18 → MV-20): 地と段、札と入力、押し物、線、字 3 段、青は操作だけ、緑は上映中の印、赤は削除と失敗。
+# dark は apple.com の暗い段の型 (#000 の地に #1d1d1f の札、青は #2997ff)。light は MV-18 の値。settings.theme で選ぶ (既定 dark)
+THEMES = {
+    "dark": {
+        "hdr_bg": "#000000", "hdr_fg": "#f5f5f7", "hdr_fg2": "#a1a1a6", "hdr_btn": "#1d1d1f",
+        "bar_bg": "#000000", "bar_fg": "#86868b",
+        "bg": "#111113", "bg2": "#111113", "bg3": "#2c2c2e",
+        "surface": "#1d1d1f", "overlay": "#3a3a3c",
+        "text": "#f5f5f7", "text2": "#a1a1a6", "text3": "#86868b",
+        "red": "#ff453a", "green": "#30d158", "yellow": "#ffd60a",
+        "blue": "#2997ff", "mauve": "#bf5af2", "pink": "#ff375f",
+        "teal": "#64d2ff", "peach": "#ff9f0a",
+        "accent": "#2997ff", "accent_hover": "#4aa8ff", "on_accent": "#ffffff",
+        "input_bg": "#1d1d1f", "border": "#3a3a3c",
+        "card": "#1d1d1f", "card_alt": "#232326", "separator": "#3a3a3c", "sel_bg": "#2997ff", "sel_fg": "#ffffff",
+    },
+    "light": {
+        "hdr_bg": "#1d1d1f", "hdr_fg": "#f5f5f7", "hdr_fg2": "#a1a1a6", "hdr_btn": "#2c2c2e",
+        "bar_bg": "#2c2c2e", "bar_fg": "#a1a1a6",
+        "bg": "#ffffff", "bg2": "#ffffff", "bg3": "#e8e8ed",
+        "surface": "#ffffff", "overlay": "#d2d2d7",
+        "text": "#1d1d1f", "text2": "#6e6e73", "text3": "#86868b",
+        "red": "#e30000", "green": "#1d9a4b", "yellow": "#ffcc00",
+        "blue": "#0071e3", "mauve": "#af52de", "pink": "#ff2d55",
+        "teal": "#5ac8fa", "peach": "#ff9500",
+        "accent": "#0071e3", "accent_hover": "#0077ed", "on_accent": "#ffffff",
+        "input_bg": "#ffffff", "border": "#d2d2d7",
+        "card": "#f5f5f7", "card_alt": "#fbfbfd", "separator": "#d2d2d7", "sel_bg": "#e3f0ff", "sel_fg": "#0071e3",
+    },
 }
+
+
+def _theme_name() -> str:
+    st = load_json(SETTINGS_FILE)
+    t = st.get("theme") if isinstance(st, dict) else None
+    return t if t in THEMES else "dark"
+
+
+C = dict(THEMES[_theme_name()])
+
+
+def _merge_ranking(ms: list[dict], rk: list[dict]) -> dict:
+    """上映中 (人気順、image / synopsis / cast つき) にランキングの題名を足す。同じ題名はランキングで上書きしない
+    (MV-20 で見つけた: ランキングのページには image と synopsis が無く、上書きで人気 1〜3 位の写真と気分が消えていた)。"""
+    d = {m["title"]: m for m in ms}
+    for m in rk:
+        cur = d.get(m["title"])
+        if cur is None:
+            d[m["title"]] = m
+        else:
+            for k, v in m.items():
+                if v and not cur.get(k):
+                    cur[k] = v
+    return d
 
 
 # =====================================================================
@@ -396,6 +437,7 @@ class MovieApp:
         self._ns_sort = "rank"            # rank | taste
         self._mood = "おまかせ"             # 今日はどんな気分? (MV-9)
         self._picks = []
+        self._picks_seen = set()          # 『次の候補』で除く題名 (その場だけ、MV-20)
         self._poster_imgs = {}
         self._pick_cards = []
         # 字体 (MV-13、HIG typography): 1 書体、4 段。細字なし。太字は見出し (h) と札の題名 (strong) だけ
@@ -422,15 +464,31 @@ class MovieApp:
         s.theme_use("clam")
         for name in ("WL.Treeview", "NS.Treeview"):
             rh = 40 if name.startswith("WL") else 34
-            s.configure(name, background=C["bg"], foreground=C["text"], fieldbackground=C["bg"],
+            s.configure(name, background=C["card"], foreground=C["text"], fieldbackground=C["card"],
                         font=("Segoe UI", 10), rowheight=rh, borderwidth=0)
-            s.configure(f"{name}.Heading", background=C["card"], foreground=C["text2"],
+            s.configure(f"{name}.Heading", background=C["bg3"], foreground=C["text2"],
                         font=("Segoe UI", 9), borderwidth=0, relief="flat", padding=(8, 6))
-            s.map(name, background=[("selected", "#e3f0ff")], foreground=[("selected", C["accent"])])
+            s.map(name, background=[("selected", C["sel_bg"])], foreground=[("selected", C["sel_fg"])])
+            s.map(f"{name}.Heading", background=[("active", C["bg3"])])
         s.configure("Prog.Horizontal.TProgressbar", troughcolor=C["bg3"], background=C["accent"],
                     borderwidth=0, thickness=4)
-        s.configure("TCombobox", fieldbackground=C["input_bg"], foreground=C["text"], padding=4)
-        s.map("TCombobox", fieldbackground=[("readonly", C["input_bg"])], foreground=[("readonly", C["text"])])
+        s.configure("TCombobox", fieldbackground=C["input_bg"], background=C["bg3"], foreground=C["text"], arrowcolor=C["text2"],
+                    bordercolor=C["border"], lightcolor=C["input_bg"], darkcolor=C["input_bg"], padding=4)
+        s.map("TCombobox", fieldbackground=[("readonly", C["input_bg"])], foreground=[("readonly", C["text"])],
+              selectbackground=[("readonly", C["input_bg"])], selectforeground=[("readonly", C["text"])])
+        self.root.option_add("*TCombobox*Listbox.background", C["card"])
+        self.root.option_add("*TCombobox*Listbox.foreground", C["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", C["on_accent"])
+        s.configure("Vertical.TScrollbar", troughcolor=C["bg"], background=C["bg3"], bordercolor=C["bg"], arrowcolor=C["text2"],
+                    lightcolor=C["bg3"], darkcolor=C["bg3"])
+        s.map("Vertical.TScrollbar", background=[("active", C["border"])])
+        s.configure("TNotebook", background=C["bg"], borderwidth=0)
+        s.configure("TNotebook.Tab", background=C["bg3"], foreground=C["text2"], padding=(10, 5), borderwidth=0)
+        s.map("TNotebook.Tab", background=[("selected", C["card"])], foreground=[("selected", C["text"])])
+        for w in ("TCheckbutton", "TRadiobutton"):
+            s.configure(w, background=C["bg"], foreground=C["text"], indicatorcolor=C["input_bg"])
+            s.map(w, background=[("active", C["bg"])], indicatorcolor=[("selected", C["accent"])])
 
     def _build_ui(self):
         # ヘッダ (MV-18): 黒地に白い題名、操作は字だけの薄灰のボタン
@@ -449,6 +507,7 @@ class MovieApp:
         self.pref_label = tk.Label(pf, text="", font=self.F["small"], fg=C["hdr_fg"], bg=C["hdr_bg"])
         self.pref_label.pack(side="left", padx=(0, 8))
         hbtn("変更", self._open_region_selector).pack(side="left")
+        hbtn("外観", self._toggle_theme).pack(side="left", padx=(8, 0))
         hbtn("メール", self._open_mail_settings).pack(side="left", padx=(8, 0))
         hbtn("好み", self._open_taste).pack(side="left", padx=(8, 0))
         hbtn("情報", self._open_about).pack(side="left", padx=(8, 0))
@@ -460,6 +519,7 @@ class MovieApp:
         # 状況の帯 (MV-7): 濃い灰に薄灰の字
         self.bar_lbl = tk.Label(self.root, text="", font=self.F["caption"], fg=C["bar_fg"], bg=C["bar_bg"], anchor="w", padx=24, pady=4)
         self.bar_lbl.pack(fill="x")
+        tk.Frame(self.root, bg=C["separator"], height=1).pack(fill="x")
 
         self.progress = ttk.Progressbar(self.root, style="Prog.Horizontal.TProgressbar", mode="determinate", maximum=fetch.TOTAL_PAGES)
 
@@ -907,6 +967,7 @@ class MovieApp:
             lines.append("源から動かしています (固めていない)")
         lines.append(f"データの置き場: {APP_DIR}")
         lines.append(f"記録: {APP_DIR / 'notify_log.json'}")
+        lines.append(f"外観: {self.settings.get('theme', 'dark')} (ヘッダの『外観』で dark / light)")
         if _FROZEN and APP_DIR != EXE_DIR:
             lines.append(f"exe: {EXE_DIR}")
         return "\n".join(lines)
@@ -1087,6 +1148,31 @@ class MovieApp:
     def save_settings(self):
         save_json(SETTINGS_FILE, self.settings)
 
+    def _toggle_theme(self):
+        """MV-20: dark ⇄ light。pack した物を全部捨てて _build_ui からやり直す (Toplevel は残す)。取得中は断る。"""
+        if self.is_fetching:
+            self._status("取得中は外観を変えられません。少し待ってから")
+            return
+        name = "light" if self.settings.get("theme", "dark") == "dark" else "dark"
+        t0 = time.perf_counter()
+        self.settings["theme"] = name
+        self.save_settings()
+        C.clear()
+        C.update(THEMES[name])
+        self.root.configure(bg=C["bg"])
+        for w in self.root.winfo_children():
+            if not isinstance(w, tk.Toplevel):
+                w.destroy()
+        self._setup_styles()
+        self._build_ui()
+        self._refresh_wl()
+        if self.now_showing:
+            self._filter_ns()
+            self._refresh_picks()
+            self.ns_upd.config(text=f"更新: {self._last_fetch.get('ts', '')}" + (" (キャッシュ)" if self._last_fetch.get("src") == "キャッシュ" else ""))
+        self.refresh_bar()
+        self._status(f"外観: {name} ({int((time.perf_counter() - t0) * 1000)} ms)")
+
     def _open_mail_settings(self):
         MailSettingsDialog(self)
 
@@ -1167,7 +1253,7 @@ class MovieApp:
         parts = []
         if self._fetch_page:
             p, n = self._fetch_page
-            parts.append(f"📡 上映中 {p}/11 ページ ({n} 件)…")
+            parts.append(f"📡 上映中 {p}/{fetch.TOTAL_PAGES} ページ ({n} 件)…")
         elif self._last_fetch.get("error"):
             prev = f" · 前回 {self._last_fetch['ts']} のまま" if self._last_fetch.get("ts") else ""
             parts.append(f"取得 失敗 ({self._last_fetch['error']}){prev}")
@@ -1353,8 +1439,7 @@ class MovieApp:
 
         def work():
             ms = fetch_now_showing()
-            rk = fetch_ranking()
-            d = {m["title"]: m for m in ms + rk}
+            d = _merge_ranking(ms, fetch_ranking())
             self.root.after(0, lambda: self._on_auto_done(d))
 
         threading.Thread(target=work, daemon=True).start()
@@ -1384,8 +1469,7 @@ class MovieApp:
                 self.root.after(0, lambda: self._on_prog(p, t))
 
             ms = fetch_now_showing(progress_cb=prog)
-            rk = fetch_ranking()
-            d = {m["title"]: m for m in ms + rk}
+            d = _merge_ranking(ms, fetch_ranking())
             self.root.after(0, lambda: self._on_fetch_done(d))
 
         threading.Thread(target=work, daemon=True).start()
@@ -1445,59 +1529,116 @@ class MovieApp:
         fetch.prune_posters(POSTERS_DIR, [m.get("movie_id") for m in self.now_showing.values()])
 
     # ---- おすすめ (MV-9: 景色・行動・余韻) ----
+    PICK_N_CYCLE = (3, 6, 9, 12)
+    CARD_W, IMG_W, IMG_H = 200, 184, 104
+
     def _build_picks(self, p):
         self.picks_frame = tk.Frame(p, bg=C["bg"])
         self.picks_frame.pack(fill="x", padx=16, pady=(16, 0))
         top = tk.Frame(self.picks_frame, bg=C["bg"])
         top.pack(fill="x")
         tk.Label(top, text="おすすめ", font=self.F["h2"], fg=C["text"], bg=C["bg"]).pack(side="left")
-        self.picks_toggle = tk.Button(top, text="隠す", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=12, pady=4, cursor="hand2", command=self._toggle_picks)
+        self.picks_toggle = self._flat(top, "隠す", self._toggle_picks)
         self.picks_toggle.pack(side="right")
-        # 気分はポップアップ (段階的に見せる)。項目に件数
-        self.mood_menu = tk.Menu(self.root, tearoff=0, font=self.F["btn"])
-        self.mood_btn = tk.Menubutton(top, text="気分: おまかせ", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=12, pady=4,
-                                      cursor="hand2", menu=self.mood_menu, direction="below")
-        self.mood_btn.pack(side="right", padx=(0, 8))
-        self._paint_moods()
+        self._flat(top, "次の候補", self._next_picks).pack(side="right", padx=(0, 8))
+        self.picks_n_btn = self._flat(top, f"{self._picks_n()} 件", self._cycle_picks_n)
+        self.picks_n_btn.pack(side="right", padx=(0, 8))
+        self._flat(top, "›", lambda: self._scroll_rail(1)).pack(side="right", padx=(0, 8))
+        self._flat(top, "‹", lambda: self._scroll_rail(-1)).pack(side="right", padx=(0, 2))
+        # 気分の札の行 (MV-20: ポップアップをやめて常に見せる。件数つき、選んだ物は青)
+        self.mood_row = tk.Frame(self.picks_frame, bg=C["bg"])
+        self.mood_row.pack(fill="x", pady=(8, 0))
+        self.mood_btns = {}
+        for mood in picks.MOODS:
+            b = tk.Button(self.mood_row, text=mood, font=self.F["small"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+                          activebackground=C["border"], activeforeground=C["text"], disabledforeground=C["text3"],
+                          command=lambda m=mood: self._set_mood(m))
+            b.pack(side="left", padx=(0, 4))
+            self.mood_btns[mood] = b
         self.picks_note = tk.Label(self.picks_frame, text="", font=self.F["caption"], fg=C["text3"], bg=C["bg"], anchor="w")
-        self.picks_note.pack(fill="x")
-        self.cards_frame = tk.Frame(self.picks_frame, bg=C["bg"])
-        self.cards_frame.pack(fill="x", pady=(4, 0))
+        self.picks_note.pack(fill="x", pady=(4, 0))
+        self._paint_moods()
+        # 札は横一列 (Canvas の中の Frame)。‹ › と滚轮で 1 枚ずつ送る
+        self._blank_img = tk.PhotoImage(width=self.IMG_W, height=self.IMG_H)
+        self.rail = tk.Canvas(self.picks_frame, bg=C["bg"], highlightthickness=0, height=self.IMG_H + 150, xscrollincrement=self.CARD_W + 8)
+        self.cards_frame = tk.Frame(self.rail, bg=C["bg"])
+        self.rail.create_window((0, 0), window=self.cards_frame, anchor="nw")
+        self.cards_frame.bind("<Configure>", self._on_rail_configure)
+        self.rail.bind("<MouseWheel>", self._on_rail_wheel)
+        self.rail.pack(fill="x", pady=(6, 0))
         if self.settings.get("picks_hidden"):
-            self.cards_frame.pack_forget()
-            self.picks_toggle.config(text="表示")
+            self._toggle_picks(force_hidden=True)
+
+    def _flat(self, parent, text, cmd):
+        return tk.Button(parent, text=text, font=self.F["btn"], bg=C["bg3"], fg=C["text2"], activebackground=C["border"], activeforeground=C["text"],
+                         relief="flat", bd=0, padx=12, pady=4, cursor="hand2", command=cmd)
+
+    def _on_rail_configure(self, e=None):
+        self.rail.configure(scrollregion=self.rail.bbox("all"))
+        h = self.cards_frame.winfo_reqheight()
+        if h > 1:
+            self.rail.configure(height=h)
+
+    def _on_rail_wheel(self, e):
+        self.rail.xview_scroll(-1 * (e.delta // 120), "units")
+
+    def _scroll_rail(self, d: int):
+        self.rail.xview_scroll(d, "units")
+
+    def _picks_n(self) -> int:
+        n = self.settings.get("picks_n", 6)
+        return n if n in self.PICK_N_CYCLE else 6
+
+    def _cycle_picks_n(self):
+        c = self.PICK_N_CYCLE
+        n = c[(c.index(self._picks_n()) + 1) % len(c)]
+        self.settings["picks_n"] = n
+        self.save_settings()
+        self.picks_n_btn.config(text=f"{n} 件")
+        self._refresh_picks()
+
+    def _next_picks(self):
+        self._picks_seen |= {pk["movie"].get("title") for pk in self._picks}
+        self._refresh_picks()
 
     def _paint_moods(self):
         counts = picks.mood_counts(list(self.now_showing.values())) if self.now_showing else {}
-        self.mood_menu.delete(0, "end")
-        for mood in picks.MOODS:
+        for mood, b in self.mood_btns.items():
             n = counts.get(mood)
-            label = mood if n is None else f"{mood}  {n}"
-            self.mood_menu.add_command(label=label, command=lambda m=mood: self._set_mood(m), state="disabled" if n == 0 else "normal")
-        n = counts.get(self._mood)
-        self.mood_btn.config(text=f"気分: {self._mood}" + (f" {n}" if n is not None and self._mood != "おまかせ" else ""))
+            on = mood == self._mood
+            b.config(text=mood if n is None else f"{mood}  {n}", bg=C["accent"] if on else C["bg3"], fg=C["on_accent"] if on else C["text2"],
+                     state="disabled" if n == 0 else "normal")
 
     def _set_mood(self, mood: str):
+        if mood == self._mood:
+            return
         self._mood = mood
+        self._picks_seen = set()
         self._paint_moods()
         self._refresh_picks()
+        self._filter_ns()            # MV-20: 上映中の表にも効く
 
-    def _toggle_picks(self):
-        hidden = self.cards_frame.winfo_manager() != ""
+    def _toggle_picks(self, force_hidden: bool | None = None):
+        hidden = self.rail.winfo_manager() != "" if force_hidden is None else force_hidden
         if hidden:
-            self.cards_frame.pack_forget()
+            for w in (self.mood_row, self.picks_note, self.rail):
+                w.pack_forget()
             self.picks_toggle.config(text="表示")
         else:
-            self.cards_frame.pack(fill="x", pady=(4, 0))
+            self.mood_row.pack(fill="x", pady=(8, 0))
+            self.picks_note.pack(fill="x", pady=(4, 0))
+            self.rail.pack(fill="x", pady=(6, 0))
             self.picks_toggle.config(text="隠す")
-        self.settings["picks_hidden"] = hidden
-        self.save_settings()
+        if force_hidden is None:
+            self.settings["picks_hidden"] = hidden
+            self.save_settings()
 
     def _refresh_picks(self):
-        """札 3 枚を選び直して描く。ポスターと劇場は別スレッドで後から入る。"""
+        """札 n 枚 (3/6/9/12) を選び直して描く。写真と劇場は別スレッドで後から入る。"""
         for w in self.cards_frame.winfo_children():
             w.destroy()
         self._pick_cards = []
+        self.rail.xview_moveto(0)
         if not self.now_showing:
             self.picks_note.config(text="上映中の一覧がまだありません")
             return
@@ -1505,47 +1646,55 @@ class MovieApp:
         self._paint_moods()
         movies, note = picks.mood_filter(list(self.now_showing.values()), self._mood)
         wl = picks.wl_showing_titles(self.watchlist, self.dir_watchlist, self.now_showing, self.theater_wl)
-        self._picks = picks.choose(movies, wl, self.taste, picks.load_dismissed(APP_DIR, today))
+        dismissed = picks.load_dismissed(APP_DIR, today)
+        n = self._picks_n()
+        self._picks = picks.choose(movies, wl, self.taste, dismissed, n=n, exclude=self._picks_seen)
+        if len(self._picks) < n and self._picks_seen:        # 候補が尽きた → 最初から
+            self._picks_seen = set()
+            self._picks = picks.choose(movies, wl, self.taste, dismissed, n=n)
+            note = (note + "  ·  " if note else "") + "候補が尽きたので最初から"
         self.picks_note.config(text=note)
         for pk in self._picks:
             self._pick_cards.append(self._make_card(pk))
         threading.Thread(target=self._load_card_extras, args=(list(self._picks),), daemon=True).start()
 
     def _make_card(self, pk: dict) -> dict:
+        """縦の札 (MV-20): 写真 184×104 | 題名 2 行 | 監督 · 理由 | 📍 館 | 観たい いまいち 観た | 印。幅は写真で決まる (200)。"""
         m = pk["movie"]
-        card = tk.Frame(self.cards_frame, bg=C["card"], padx=8, pady=8, highlightthickness=1, highlightbackground=C["border"])
-        card.pack(fill="x", pady=(0, 8))
-        poster = tk.Label(card, text="…" if m.get("image") else "写真なし", width=11, height=4, bg=C["bg3"], fg=C["text3"], font=self.F["caption"], cursor="hand2")
-        poster.pack(side="left", padx=(0, 10))
-        bf = tk.Frame(card, bg=C["card"])
-        bf.pack(side="right", padx=(8, 0))
-        body = tk.Frame(card, bg=C["card"])
-        body.pack(side="left", fill="both", expand=True)
-        title = tk.Label(body, text=m.get("title", ""), font=self.F["strong"], fg=C["text"], bg=C["card"], anchor="w", justify="left", wraplength=360, cursor="hand2")
-        title.pack(anchor="w")
-        sub = (m.get("director") or "監督 —") + "  ·  " + pk["reason"]
-        tk.Label(body, text=sub, font=self.F["caption"], fg=C["text2"], bg=C["card"], anchor="w", wraplength=360, justify="left").pack(anchor="w")
-        theater = tk.Label(body, text="📍 …", font=self.F["caption"], fg=C["text3"], bg=C["card"], anchor="w", wraplength=300, justify="left")
-        theater.pack(anchor="w")
-        mark = tk.Label(bf, text="", font=self.F["caption"], fg=C["green"], bg=C["card"])
+        card = tk.Frame(self.cards_frame, bg=C["card"], padx=8, pady=8)
+        card.pack(side="left", padx=(0, 8))
+        poster = tk.Label(card, image=self._blank_img, compound="center", text="…" if m.get("image") else "写真なし",
+                          bg=C["bg3"], fg=C["text3"], font=self.F["caption"], cursor="hand2")
+        poster.pack()
+        title = tk.Label(card, text=m.get("title", ""), font=self.F["strong"], fg=C["text"], bg=C["card"], anchor="nw", justify="left",
+                         wraplength=self.IMG_W, height=2, cursor="hand2")
+        title.pack(fill="x", pady=(6, 0))
+        sub = tk.Label(card, text=(m.get("director") or "監督 —") + "  ·  " + pk["reason"], font=self.F["caption"], fg=C["text2"], bg=C["card"],
+                       anchor="nw", wraplength=self.IMG_W, justify="left", height=2)
+        sub.pack(fill="x")
+        theater = tk.Label(card, text="📍 …", font=self.F["caption"], fg=C["text3"], bg=C["card"], anchor="w")
+        theater.pack(fill="x")
+        row = tk.Frame(card, bg=C["card"])
+        row.pack(fill="x", pady=(6, 0))
+        mark = tk.Label(card, text="", font=self.F["caption"], fg=C["green"], bg=C["card"], anchor="w")
+        mark.pack(fill="x", pady=(4, 0))
 
         def small(text, cmd, primary=False):
-            return tk.Button(bf, text=text, font=self.F["caption"], bg=C["accent"] if primary else C["bg3"], fg="white" if primary else C["text2"],
+            return tk.Button(row, text=text, font=self.F["caption"], bg=C["accent"] if primary else C["bg3"], fg=C["on_accent"] if primary else C["text2"],
+                             activebackground=C["accent_hover"] if primary else C["border"], activeforeground=C["on_accent"] if primary else C["text"],
                              relief="flat", bd=0, padx=8, pady=2, cursor="hand2", command=cmd)
 
-        mark.pack(side="top", anchor="e")
-        row = tk.Frame(bf, bg=C["card"])
-        row.pack(side="top")
-        bf = row
         small("観たい", lambda: self._pick_want(m, mark), primary=True).pack(side="left")
         small("いまいち", lambda: self._pick_meh(m)).pack(side="left", padx=(4, 0))
-        small("もう観た", lambda: self._pick_seen(m, mark, card)).pack(side="left", padx=(4, 0))
+        small("観た", lambda: self._pick_seen(m, mark, card)).pack(side="left", padx=(4, 0))
         for w in (poster, title):
             w.bind("<Button-1>", lambda e, mv=m: self._theater_popup(mv.get("title", ""), mv.get("movie_id", "")) if mv.get("movie_id") else None)
+        for w in (card, poster, title, sub, theater, row, mark):
+            w.bind("<MouseWheel>", self._on_rail_wheel)
         return {"movie": m, "poster": poster, "theater": theater, "mark": mark}
 
     def _load_card_extras(self, pks: list[dict]):
-        """別スレッド: ポスター (3 枚だけ、posters/ に残す) と最初の都道府県の 1 館。"""
+        """別スレッド: 札の写真 (posters/ に残す。2 回目からは 0 要求) と最初の都道府県の 1 館 (1 日キャッシュ)。"""
         pref = (self.pref_codes or ["13"])[0]
         for pk in pks:
             m = pk["movie"]
@@ -1553,7 +1702,7 @@ class MovieApp:
             path = None
             if m.get("image") and mid.isdigit():
                 dest = POSTERS_DIR / f"{mid}.jpg"
-                if fetch.fetch_poster(m["image"], dest):
+                if fetch.fetch_poster(m["image"], dest) or dest.exists():     # 別の取り直しが先に書いていても使う
                     path = dest
             th = fetch.theaters_cached(mid, pref, APP_DIR) if mid.isdigit() else []
             name = th[0]["name"] if th else ""
@@ -1563,18 +1712,17 @@ class MovieApp:
         for c in self._pick_cards:
             if c["movie"] is not m:
                 continue
-            if theater_name:
-                c["theater"].config(text=f"📍 {theater_name}")
-            else:
-                c["theater"].config(text="📍 —")
+            c["theater"].config(text=f"📍 {theater_name}" if theater_name else "📍 —")
             shown = False
             if path and Image is not None:
                 try:
-                    img = Image.open(path)
-                    img.thumbnail((96, 64))
-                    ph = ImageTk.PhotoImage(img)
+                    img = Image.open(path).convert("RGB")
+                    img.thumbnail((self.IMG_W, self.IMG_H))
+                    canvas = Image.new("RGB", (self.IMG_W, self.IMG_H), C["bg3"])     # 札の高さを揃える
+                    canvas.paste(img, ((self.IMG_W - img.width) // 2, (self.IMG_H - img.height) // 2))
+                    ph = ImageTk.PhotoImage(canvas)
                     self._poster_imgs[m.get("movie_id")] = ph
-                    c["poster"].config(image=ph, text="", width=img.width, height=img.height)
+                    c["poster"].config(image=ph, text="")
                     shown = True
                 except Exception:  # noqa: BLE001 — 壊れた jpg 等
                     pass
@@ -1652,6 +1800,11 @@ class MovieApp:
         seen = set()
         self._ns_scores = {s["title"]: s for s in self.taste.score_all(list(self.now_showing.values()))}
         items = list(self.now_showing.items())
+        mood_words = picks.MOODS.get(self._mood) or []
+        if mood_words:                          # MV-20: 気分で表も絞る (0 件なら全部)
+            kept, _ = picks.mood_filter([i for _, i in items], self._mood)
+            keep_titles = {i.get("title") for i in kept}
+            items = [(t, i) for t, i in items if t in keep_titles]
         if self._ns_sort == "taste" and self.taste.learned():
             items.sort(key=lambda kv: -self._ns_scores.get(kv[0], {}).get("score", 0.0))
         for title, info in items:
@@ -1690,11 +1843,14 @@ class MovieApp:
                 self.ns_tree.insert("", "end", iid=iid, values=("⬜", "", t, d))
                 self._ns_extra[iid] = {"title": t, "movie_id": w.get("movie_id", ""), "url": w.get("url", ""), "director": d}
                 extra += 1
-        if kw:
-            if is_dir:
-                self.ns_cnt.config(text=f"🟢{n} ⬜{extra} / {len(self.now_showing)}件")
-            else:
-                self.ns_cnt.config(text=f"{n}/{len(self.now_showing)}件")
+        total = len(self.now_showing)
+        head = f"{self._mood} " if mood_words else ""
+        if kw and is_dir:
+            self.ns_cnt.config(text=f"{head}🟢{n} ⬜{extra} / {total}件")
+        elif kw or mood_words:
+            self.ns_cnt.config(text=f"{head}{n}/{total}件")
+        else:
+            self.ns_cnt.config(text=f"{total}件")
 
     # ---- 左: 映画のウォッチリスト ----
     def _refresh_wl(self):
@@ -1957,8 +2113,7 @@ class MovieApp:
                     self.root.after(0, lambda: self._on_prog(p, t))
 
                 ms = fetch_now_showing(progress_cb=prog)
-                rk = fetch_ranking()
-                d = {m["title"]: m for m in ms + rk}
+                d = _merge_ranking(ms, fetch_ranking())
                 self.root.after(0, lambda: self._on_fetch_then_dir_check(d))
 
             threading.Thread(target=work, daemon=True).start()
@@ -2213,8 +2368,7 @@ class MovieApp:
                     self.root.after(0, lambda: self._on_prog(p, t))
 
                 ms = fetch_now_showing(progress_cb=prog)
-                rk = fetch_ranking()
-                d = {m["title"]: m for m in ms + rk}
+                d = _merge_ranking(ms, fetch_ranking())
                 self.root.after(0, lambda: self._on_fetch_then_check(d))
 
             threading.Thread(target=work, daemon=True).start()
@@ -2481,8 +2635,7 @@ def _send_mail_cli() -> int:
     wl = load_json(WATCHLIST_FILE)
     dwl = load_json(DIR_WL_FILE)
     ms = fetch_now_showing()
-    rk = fetch_ranking()
-    now_showing = {m["title"]: m for m in ms + rk}
+    now_showing = _merge_ranking(ms, fetch_ranking())
     if not now_showing:
         _say("取得できませんでした: " + (fetch.error_text(200) or "0 件"))
         return 2

@@ -82,10 +82,12 @@ def wl_showing_titles(watchlist: list, dir_watchlist: list, now_showing: dict, t
 
 
 def choose(movies: list[dict], wl_reasons: dict[str, str], model: taste.Model, dismissed: set[str],
-           rng: random.Random | None = None, n: int = N_PICKS) -> list[dict]:
-    """movies は上映中の順 (人気順)。戻り [{movie, reason, kind}] (kind: wl | taste | explore | rank)。"""
+           rng: random.Random | None = None, n: int = N_PICKS, exclude: set[str] | None = None) -> list[dict]:
+    """movies は上映中の順 (人気順)。戻り [{movie, reason, kind}] (kind: wl | taste | explore | rank)。
+    exclude は題名の集合 (『次の候補』で今出ている物を除く、MV-20)。n 枚に満たなければ満たない数で返す。"""
     rng = rng or random.Random()
-    cands = [m for m in movies if m.get("movie_id") not in dismissed]
+    ex = exclude or set()
+    cands = [m for m in movies if m.get("movie_id") not in dismissed and m.get("title") not in ex]
     scores = {s["title"]: s for s in model.score_all(cands, rng=rng, explore=False)}
     picked: list[dict] = []
     used_dirs: set[str] = set()

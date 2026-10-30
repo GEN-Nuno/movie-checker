@@ -136,10 +136,11 @@ def fetch_poster(image_url: str, dest, max_bytes: int = POSTER_MAX_BYTES) -> boo
             _set_error("http", "ポスターが大きすぎるか空です", image_url)
             return False
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(".tmp")
+        import os
+        import threading
+        tmp = dest.with_suffix(f".{os.getpid()}-{threading.get_ident()}.tmp")   # 札の取り直しが重なっても tmp が衝突しない (MV-20)
         with open(tmp, "wb") as f:
             f.write(body)
-        import os
         os.replace(tmp, dest)
         return True
     except requests.RequestException as e:

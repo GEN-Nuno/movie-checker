@@ -75,3 +75,14 @@ def test_mood_counts_and_word_counts():
     assert c["おまかせ"] == 5 and c["笑いたい"] == 1 and c["迫力"] >= 1
     wc = dict(picks.word_counts(ms))
     assert wc.get("家族") == 1 and wc.get("コメディ") == 1
+
+
+def test_choose_n_and_exclude_for_next_picks():
+    """MV-20: n 枚と、『次の候補』の除外 (題名)。足りなければ足りない数で返す。"""
+    ms = _movies()
+    first = picks.choose(ms, {}, taste.Model(), dismissed=set(), rng=random.Random(0), n=2)
+    assert [g["movie"]["title"] for g in first] == ["大作", "泣ける"]
+    nxt = picks.choose(ms, {}, taste.Model(), dismissed=set(), rng=random.Random(0), n=2, exclude={"大作", "泣ける"})
+    assert [g["movie"]["title"] for g in nxt] == ["笑える", "A の別作"]   # 大作が除外なので監督 A は空いている
+    last = picks.choose(ms, {}, taste.Model(), dismissed=set(), rng=random.Random(0), n=2, exclude={"大作", "泣ける", "笑える", "A の別作"})
+    assert [g["movie"]["title"] for g in last] == ["静か"]
