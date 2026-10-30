@@ -15,23 +15,23 @@ eiga.com から現在上映中の映画を取得し、ウォッチリストと�
  2026-10-30 に書き起こした物。元の .py は見つからなかった。行の並びと名前は
  bytecode のとおり、コメントと docstring は書き起こしの際に足した)
 """
-import json
-import math
-import os
-import re
 import sys
 import threading
 import tkinter as tk
-import unicodedata
 import webbrowser
-from urllib.parse import quote as urlquote
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
-import requests
-from bs4 import BeautifulSoup
+from moviecheck import fetch, store
+from moviecheck.fetch import (  # noqa: F401 — 画面が使う名前 (置き場だけ変えた)
+    EIGA_BASE, PREFECTURES,
+    fetch_now_showing, fetch_ranking, fetch_theaters_multi, search_eiga,
+    fetch_movie_director, fetch_person_id, fetch_directed_movies, search_persons,
+)
+from moviecheck.match import normalize, find_match, suggest_score, ranked_suggestions  # noqa: F401
+from moviecheck.store import load_json, save_json
 
 # ---- 置き場 (exe なら exe の隣、源なら .py の隣) ----
 if getattr(sys, "frozen", False):
@@ -47,27 +47,7 @@ DIR_WL_FILE = APP_DIR / "director_watchlist.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
 CACHE_FILE = APP_DIR / "movie_cache.json"
 
-EIGA_NOW_URL = "https://eiga.com/now/"
-EIGA_RANKING_URL = "https://eiga.com/ranking/"
-EIGA_BASE = "https://eiga.com"
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-HEADERS = {"User-Agent": USER_AGENT}
-SKIP_TEXTS = {"予告編・動画", "レビュー", "作品情報", "作品", "映画館を探す"}
-
-PREFECTURES = {
-    "1": "北海道", "2": "青森", "3": "岩手", "4": "宮城", "5": "秋田",
-    "6": "山形", "7": "福島", "8": "茨城", "9": "栃木", "10": "群馬",
-    "11": "埼玉", "12": "千葉", "13": "東京", "14": "神奈川", "15": "新潟",
-    "16": "富山", "17": "石川", "18": "福井", "19": "山梨", "20": "長野",
-    "21": "岐阜", "22": "静岡", "23": "愛知", "24": "三重", "25": "滋賀",
-    "26": "京都", "27": "大阪", "28": "兵庫", "29": "奈良", "30": "和歌山",
-    "31": "鳥取", "32": "島根", "33": "岡山", "34": "広島", "35": "山口",
-    "36": "徳島", "37": "香川", "38": "愛媛", "39": "高知", "40": "福岡",
-    "41": "佐賀", "42": "長崎", "43": "熊本", "44": "大分", "45": "宮崎",
-    "46": "鹿児島", "47": "沖縄",
-}
+# eiga.com の URL・都道府県は moviecheck.fetch に (MV-1)
 REGION_GROUPS = [
     ("北海道・東北", ["1", "2", "3", "4", "5", "6", "7"]),
     ("関東", ["13", "14", "11", "12", "8", "9", "10"]),
@@ -89,394 +69,6 @@ C = {
     "accent_hover": "#0051a8", "input_bg": "#ffffff", "border": "#d1d1d6",
     "card": "#ffffff", "card_alt": "#f9f9fb", "separator": "#c6c6c8",
 }
-
-
-# =====================================================================
-# eiga.com の取得
-# =====================================================================
-def fetch_now_showing(progress_cb=None) -> list[dict]:
-    """上映中の映画 (全国ランキング順) を 1〜11 ページ取る。題名で重複を除く。"""
-    movies = []
-    for page in range(1, 12):
-        if page == 1:
-            url = f"{EIGA_NOW_URL}all/rank/"
-        else:
-            url = f"{EIGA_NOW_URL}all/rank/{page}/"
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
-            if resp.status_code == 404:
-                break
-            resp.raise_for_status()
-            resp.encoding = "utf-8"
-        except requests.RequestException:
-            break
-        soup = BeautifulSoup(resp.text, "html.parser")
-        found = _extract_movies(soup)
-        if not found:
-            break
-        movies.extend(found)
-        if progress_cb:
-            progress_cb(page, len(movies))
-    seen = set()
-    unique = []
-    for m in movies:
-        if m["title"] not in seen:
-            seen.add(m["title"])
-            unique.append(m)
-    return unique
-
-
-def fetch_ranking() -> list[dict]:
-    try:
-        resp = requests.get(EIGA_RANKING_URL, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = "utf-8"
-    except requests.RequestException:
-        return []
-    return _extract_movies(BeautifulSoup(resp.text, "html.parser"))
-
-
-def _extract_movies(soup: BeautifulSoup) -> list[dict]:
-    """eiga.com の一覧から {title, url, movie_id, director} を起こす。
-    まず div.txt-box (監督つき)、無ければ a[href*="/movie/"] 全部から。"""
-    movies, seen = [], set()
-    for box in soup.select("div.txt-box"):
-        a_tag = box.select_one('h2 a[href*="/movie/"]')
-        if a_tag is None:
-            a_tag = box.select_one('a[href*="/movie/"]')
-        if a_tag is None:
-            continue
-        href = a_tag.get("href", "")
-        text = a_tag.get_text(strip=True)
-        if not re.match(r"^(https://eiga\.com)?/movie/\d+/$", href):
-            continue
-        if not text or len(text) <= 1 or text in SKIP_TEXTS or text in seen:
-            continue
-        seen.add(text)
-        m = re.search(r"/movie/(\d+)/", href)
-        movie_id = m.group(1) if m else ""
-        full_url = href if href.startswith("http") else f"{EIGA_BASE}{href}"
-        directors = []
-        staff_ul = box.select_one("ul.cast-staff")
-        if staff_ul:
-            for li in staff_ul.select("li"):
-                li_text = li.get_text()
-                if "監督" in li_text:
-                    for span in li.select("span"):
-                        name = span.get_text(strip=True)
-                        if name:
-                            directors.append(name)
-        director = ", ".join(directors)
-        movies.append({"title": text, "url": full_url, "movie_id": movie_id, "director": director})
-    for a_tag in soup.select('a[href*="/movie/"]'):
-        href = a_tag.get("href", "")
-        text = a_tag.get_text(strip=True)
-        if not re.match(r"^(https://eiga\.com)?/movie/\d+/$", href):
-            continue
-        if not text or len(text) <= 1 or text in SKIP_TEXTS or text in seen:
-            continue
-        seen.add(text)
-        m = re.search(r"/movie/(\d+)/", href)
-        movie_id = m.group(1) if m else ""
-        full_url = href if href.startswith("http") else f"{EIGA_BASE}{href}"
-        movies.append({"title": text, "url": full_url, "movie_id": movie_id, "director": ""})
-    return movies
-
-
-def fetch_theaters(movie_id: str, pref_code: str) -> list[dict]:
-    """その映画を上映している映画館 (都道府県ごと)。404 や失敗は空。"""
-    url = f"{EIGA_BASE}/movie-pref/{movie_id}/{pref_code}/"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        if resp.status_code == 404:
-            return []
-        resp.raise_for_status()
-        resp.encoding = "utf-8"
-    except requests.RequestException:
-        return []
-    soup = BeautifulSoup(resp.text, "html.parser")
-    theaters = []
-    for h3_a in soup.select("h3 a"):
-        href = h3_a.get("href", "")
-        name = h3_a.get_text(strip=True)
-        if "/movie-theater/" in href and name:
-            full_url = href if href.startswith("http") else f"{EIGA_BASE}{href}"
-            theaters.append({"name": name, "url": full_url})
-    return theaters
-
-
-def fetch_theaters_multi(movie_id: str, pref_codes: list[str]) -> dict[str, list[dict]]:
-    result = {}
-    for code in pref_codes:
-        name = PREFECTURES.get(code, code)
-        theaters = fetch_theaters(movie_id, code)
-        if theaters:
-            result[name] = theaters
-    return result
-
-
-def search_eiga(query: str, max_pages: int = 2) -> list[dict]:
-    """eiga.com の検索 (作品) を max_pages ページまで。"""
-    encoded = urlquote(query, safe="")
-    movies = []
-    seen = set()
-    for page in range(1, max_pages + 1):
-        suffix = f"{page}/" if page > 1 else ""
-        url = f"{EIGA_BASE}/search/{encoded}/movie/{suffix}"
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=10)
-            if resp.status_code != 200:
-                return movies
-            resp.encoding = "utf-8"
-        except requests.RequestException:
-            return movies
-        soup = BeautifulSoup(resp.text, "html.parser")
-        page_count = 0
-        for a_tag in soup.select('a[href*="/movie/"]'):
-            href = a_tag.get("href", "")
-            text = a_tag.get_text(strip=True)
-            if not re.match(r"^(https://eiga\.com)?/movie/\d+/$", href):
-                continue
-            if not text or len(text) <= 1 or text in SKIP_TEXTS or text in seen:
-                continue
-            seen.add(text)
-            m = re.search(r"/movie/(\d+)/", href)
-            movie_id = m.group(1) if m else ""
-            full_url = href if href.startswith("http") else f"{EIGA_BASE}{href}"
-            movies.append({"title": text, "url": full_url, "movie_id": movie_id})
-            page_count += 1
-        if page_count == 0:
-            return movies
-    return movies
-
-
-def fetch_movie_director(movie_id: str) -> str:
-    """作品ページの ld+json (director) か ul.cast-staff から監督名。"""
-    url = f"{EIGA_BASE}/movie/{movie_id}/"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            return ""
-        resp.encoding = "utf-8"
-    except requests.RequestException:
-        return ""
-    soup = BeautifulSoup(resp.text, "html.parser")
-    for script in soup.select('script[type="application/ld+json"]'):
-        try:
-            data = json.loads(script.string)
-            if isinstance(data, list):
-                data = data[0]
-            if "director" in data:
-                dirs = data["director"]
-                if isinstance(dirs, list):
-                    return ", ".join(d.get("name", "") for d in dirs if d.get("name"))
-                if isinstance(dirs, dict) and dirs.get("name"):
-                    return dirs["name"]
-        except Exception:
-            continue
-    staff_ul = soup.select_one("ul.cast-staff")
-    if staff_ul:
-        names = []
-        for li in staff_ul.select("li"):
-            if "監督" in li.get_text():
-                for sp in li.select("span"):
-                    n = sp.get_text(strip=True)
-                    if n:
-                        names.append(n)
-        if names:
-            return ", ".join(names)
-    return ""
-
-
-def fetch_person_id(name: str) -> str:
-    """人名の検索から person id。正規化した名前を含む物を優先、無ければ最初の物。"""
-    encoded = urlquote(name, safe="")
-    url = f"{EIGA_BASE}/search/{encoded}/"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            return ""
-        resp.encoding = "utf-8"
-    except requests.RequestException:
-        return ""
-    soup = BeautifulSoup(resp.text, "html.parser")
-    nq = normalize(name)
-    first_pid = ""
-    for a_tag in soup.select('a[href*="/person/"]'):
-        href = a_tag.get("href", "")
-        text = a_tag.get_text(strip=True)
-        if not re.match(r"^(https://eiga\.com)?/person/\d+/$", href):
-            continue
-        m = re.search(r"/person/(\d+)/", href)
-        if not m:
-            continue
-        pid = m.group(1)
-        if not first_pid:
-            first_pid = pid
-        if text and nq in normalize(text):
-            return pid
-    return first_pid
-
-
-def fetch_directed_movies(person_id: str, max_pages: int = 20) -> list[dict]:
-    """人物ページの作品一覧 (p.label に役割、p.title に題名)。監督の役割が無い物は除く。"""
-    movies = []
-    seen = set()
-    for page in range(1, max_pages + 1):
-        suffix = f"{page}/" if page > 1 else ""
-        url = f"{EIGA_BASE}/person/{person_id}/movie/{suffix}"
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=10)
-            if resp.status_code != 200:
-                return movies
-            resp.encoding = "utf-8"
-        except requests.RequestException:
-            return movies
-        soup = BeautifulSoup(resp.text, "html.parser")
-        page_count = 0
-        for a_tag in soup.select('a[href*="/movie/"]'):
-            href = a_tag.get("href", "")
-            if not re.match(r"^(https://eiga\.com)?/movie/\d+/$", href):
-                continue
-            label_p = a_tag.select_one("p.label")
-            title_p = a_tag.select_one("p.title")
-            if not title_p:
-                continue
-            role_text = label_p.get_text(strip=True) if label_p else ""
-            title = title_p.get_text(strip=True)
-            if label_p and "監督" not in role_text:
-                continue
-            if not title or title in seen:
-                continue
-            seen.add(title)
-            m = re.search(r"/movie/(\d+)/", href)
-            movie_id = m.group(1) if m else ""
-            full_url = href if href.startswith("http") else f"{EIGA_BASE}{href}"
-            movies.append({"title": title, "movie_id": movie_id, "url": full_url, "role": role_text})
-            page_count += 1
-        if page_count == 0:
-            return movies
-    return movies
-
-
-# =====================================================================
-# 文字の正規化と照合
-# =====================================================================
-_KANA_MAP = str.maketrans(
-    "ぁあぃいぅうぇえぉおかがきぎくぐけげこごさざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばぱひびぴふぶぷへべぺほぼぽまみむめもゃやゅゆょよらりるれろゎわゐゑをんゔゕゖ",
-    "ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲンヴヵヶ",
-)
-
-
-def normalize(text: str) -> str:
-    """NFKC → ひらがなをカタカナに → 空白・記号を除く → 小文字。"""
-    text = unicodedata.normalize("NFKC", text)
-    text = text.translate(_KANA_MAP)
-    text = re.sub(r"[\s　・：:；;,，.。\-\−\–\—～〜/／]+", "", text)
-    return text.lower().strip()
-
-
-def find_match(query: str, movies) -> str | None:
-    """完全一致 → 題名が問いを含む → 問いが題名 (3 字以上) を含む、の順で探す。"""
-    q = normalize(query)
-    for t in movies:
-        if normalize(t) == q:
-            return t
-    for t in movies:
-        if q in normalize(t):
-            return t
-    for t in movies:
-        if normalize(t) in q and len(normalize(t)) >= 3:
-            return t
-    return None
-
-
-def load_json(path: Path):
-    if not path.exists():
-        return [] if "watchlist" in path.name else {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_json(path: Path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def _common_subsequence_ratio(a: str, b: str) -> float:
-    """最長共通部分列の長さ / 長い方の長さ。"""
-    if not a or not b:
-        return 0.0
-    m, n = len(a), len(b)
-    prev = [0] * (n + 1)
-    curr = [0] * (n + 1)
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            if a[i - 1] == b[j - 1]:
-                curr[j] = prev[j - 1] + 1
-            else:
-                curr[j] = max(prev[j], curr[j - 1])
-        prev, curr = curr, [0] * (n + 1)
-    lcs_len = prev[n]
-    return lcs_len / max(m, n)
-
-
-def _bigram_similarity(a: str, b: str) -> float:
-    if len(a) < 2 or len(b) < 2:
-        return 0.0
-    bg_a = {a[i:i + 2] for i in range(len(a) - 1)}
-    bg_b = {b[i:i + 2] for i in range(len(b) - 1)}
-    inter = len(bg_a & bg_b)
-    union = len(bg_a | bg_b)
-    return inter / union if union else 0.0
-
-
-def suggest_score(query: str, candidate: str, alpha: float = 3.0) -> float:
-    """問いと候補の近さ (0〜1)。exp(-alpha × 距離)。
-    完全一致 0、前方一致 0.1×(1-比率)、逆の前方一致 0.15、途中に含む 0.2+0.3×位置、
-    候補が問いに含まれる 0.4、bigram 0.25+0.45×(1-類似)、LCS 0.35+0.5×(1-比率)、1 字 0.3+0.4×位置。"""
-    nq = normalize(query)
-    nc = normalize(candidate)
-    if not nq:
-        return 0.0
-    if nq == nc:
-        return math.exp(-alpha * 0.0)
-    if nc.startswith(nq):
-        ratio = len(nq) / len(nc)
-        dist = 0.1 * (1 - ratio)
-        return math.exp(-alpha * dist)
-    if nq.startswith(nc):
-        return math.exp(-alpha * 0.15)
-    pos = nc.find(nq)
-    if pos >= 0:
-        position_ratio = pos / max(len(nc) - len(nq), 1)
-        dist = 0.2 + 0.3 * position_ratio
-        return math.exp(-alpha * dist)
-    if nc in nq and len(nc) >= 2:
-        return math.exp(-alpha * 0.4)
-    bg_sim = _bigram_similarity(nq, nc)
-    if bg_sim >= 0.25:
-        dist = 0.25 + 0.45 * (1 - bg_sim)
-        return math.exp(-alpha * dist)
-    lcs_ratio = _common_subsequence_ratio(nq, nc)
-    if lcs_ratio >= 0.4:
-        dist = 0.35 + 0.5 * (1 - lcs_ratio)
-        return math.exp(-alpha * dist)
-    if len(nq) == 1 and nq in nc:
-        pos1 = nc.find(nq)
-        dist = 0.3 + 0.4 * (pos1 / max(len(nc) - 1, 1))
-        return math.exp(-alpha * dist)
-    return 0.0
-
-
-def ranked_suggestions(query: str, candidates, threshold: float = 0.08, max_items: int = 10, alpha: float = 3.0):
-    scored = []
-    for c in candidates:
-        s = suggest_score(query, c, alpha=alpha)
-        if s >= threshold:
-            scored.append((c, s))
-    scored.sort(key=lambda x: -x[1])
-    return scored[:max_items]
 
 
 # =====================================================================
@@ -782,6 +374,7 @@ class MovieApp:
         self._setup_styles()
         self._build_ui()
         self._refresh_wl()
+        self._show_store_notes()
         self.root.after(300, self._startup_fetch)
 
     def _setup_styles(self):
@@ -1050,6 +643,17 @@ class MovieApp:
         entry.bind("<FocusIn>", fi)
         entry.bind("<FocusOut>", fo)
 
+    def _show_store_notes(self):
+        """json が壊れていて退避から戻した等の訳 (moviecheck.store) を状態欄に。"""
+        notes = list(store.last_notes.values())
+        if notes:
+            self._status("⚠ " + " / ".join(notes))
+            store.last_notes.clear()
+
+    def _fetch_failed_text(self) -> str:
+        """取得が 0 件だった時の訳 (moviecheck.fetch.last_error)。無ければ空。"""
+        return fetch.error_text()
+
     def _status(self, msg):
         self.status_lbl.config(text=msg)
         self.root.update_idletasks()
@@ -1146,7 +750,8 @@ class MovieApp:
             self._fill_director(director)
             self._status(f"✅ 監督: {director}")
         else:
-            self._status("監督情報が見つかりませんでした")
+            why = self._fetch_failed_text()
+            self._status("監督情報が見つかりませんでした" + (f" ({why})" if why else ""))
 
     def _fill_director(self, director: str):
         self.dir_entry.delete(0, "end")
@@ -1249,7 +854,19 @@ class MovieApp:
         self.progress["value"] = page
         self._status(f"📡 取得中... ページ {page} ({total}件)")
 
+    def _fetch_got_nothing(self, movies) -> bool:
+        """取得が空で訳がある時: 前の一覧とキャッシュは守り、訳だけ状態欄に出す (v3.0 は空で上書きしていた)。"""
+        if movies or not self._fetch_failed_text():
+            return False
+        self.is_fetching = False
+        self._show_progress(False)
+        self._status(f"⚠ 0件: {self._fetch_failed_text()}")
+        self._schedule_update()
+        return True
+
     def _on_fetch_done(self, movies):
+        if self._fetch_got_nothing(movies):
+            return
         self.now_showing = movies
         self.is_fetching = False
         self._show_progress(False)
@@ -1264,7 +881,11 @@ class MovieApp:
         self.ns_cnt.config(text=f"{len(self.now_showing)}件")
         self.ns_upd.config(text=f"更新: {ts}" + (" (キャッシュ)" if cache else ""))
         src = "キャッシュ利用" if cache else "取得完了"
-        self._status(f"✅ {len(self.now_showing)}件 {src} ({ts})")
+        why = "" if cache or self.now_showing else self._fetch_failed_text()
+        if why:
+            self._status(f"⚠ 0件: {why}")
+        else:
+            self._status(f"✅ {len(self.now_showing)}件 {src} ({ts})")
         self._filter_ns()
         if self._left_mode == "director":
             self._refresh_dir_wl()
@@ -1864,6 +1485,9 @@ class MovieApp:
         self._do_check(silent=False)
 
     def _on_fetch_then_check(self, movies):
+        if self._fetch_got_nothing(movies):
+            messagebox.showwarning("上映チェック", f"上映情報を取得できませんでした。\n{self._fetch_failed_text()}")
+            return
         self.now_showing = movies
         self.is_fetching = False
         self._show_progress(False)
@@ -1991,30 +1615,7 @@ class MovieApp:
 
     def _search_eiga_directors(self, query: str) -> list[str]:
         """eiga.com の検索から人物名を 10 件まで (別スレッドから)。"""
-        encoded = urlquote(query, safe="")
-        url = f"{EIGA_BASE}/search/{encoded}/"
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=10)
-            if resp.status_code != 200:
-                return []
-            resp.encoding = "utf-8"
-        except requests.RequestException:
-            return []
-        soup = BeautifulSoup(resp.text, "html.parser")
-        names = []
-        seen = set()
-        for a_tag in soup.select('a[href*="/person/"]'):
-            href = a_tag.get("href", "")
-            text = a_tag.get_text(strip=True)
-            if not re.match(r"^(https://eiga\.com)?/person/\d+/$", href):
-                continue
-            if not text or len(text) <= 1 or text in seen:
-                continue
-            seen.add(text)
-            names.append(text)
-            if len(names) >= 10:
-                return names
-        return names
+        return search_persons(query)
 
     # ---- 劇場のポップアップ ----
     def _theater_popup(self, title: str, movie_id: str):
