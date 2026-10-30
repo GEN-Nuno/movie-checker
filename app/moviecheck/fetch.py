@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from urllib.parse import quote as urlquote
 
 import requests
@@ -18,6 +19,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 HEADERS = {"User-Agent": USER_AGENT}
+_local = threading.local()  # thread ごとの Session (MV-5: keep-alive)
 SKIP_TEXTS = {"予告編・動画", "レビュー", "作品情報", "作品", "映画館を探す"}
 MAX_BYTES = 3 * 1024 * 1024  # 応答はここで打ち切る (MV-3)
 
@@ -53,11 +55,31 @@ def _set_error(kind: str, text: str, url: str) -> None:
     last_error = {"kind": kind, "text": text, "url": url}
 
 
+def _session():
+    """この thread の requests.Session (無ければ作る)。接続を使い回す (MV-5)。試験では差し替える。"""
+    s = getattr(_local, "session", None)
+    if s is None:
+        s = requests.Session()
+        s.headers.update(HEADERS)
+        _local.session = s
+    return s
+
+
+def _drop_session():
+    s = getattr(_local, "session", None)
+    _local.session = None
+    if s is not None:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
 def _get(url: str, timeout: int, ok_statuses=(200,)) -> tuple[BeautifulSoup | None, int]:
     """GET して soup を返す。失敗は (None, status) で、last_error に訳を残す。status は 404 等、例外なら 0。"""
     global last_error
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=timeout, stream=True)
+        resp = _session().get(url, headers=HEADERS, timeout=timeout, stream=True)
         status = resp.status_code
         if status not in ok_statuses:
             if status in (404, 410):
@@ -79,6 +101,7 @@ def _get(url: str, timeout: int, ok_statuses=(200,)) -> tuple[BeautifulSoup | No
         _set_error("net", "eiga.com が時間内に応答しません", url)
         return None, 0
     except requests.exceptions.ConnectionError:
+        _drop_session()  # 使い回した接続が駄目になったかもしれない。次の要求で作り直す
         _set_error("net", "eiga.com に繋がりません (ネット)", url)
         return None, 0
     except requests.RequestException as e:

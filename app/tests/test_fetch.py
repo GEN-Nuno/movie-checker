@@ -3,6 +3,7 @@ import io
 
 import pytest
 import requests
+from types import SimpleNamespace
 
 from moviecheck import fetch
 
@@ -59,7 +60,7 @@ class Fake:
 def fake(monkeypatch):
     def install(table):
         f = Fake(table)
-        monkeypatch.setattr(fetch.requests, "get", f)
+        monkeypatch.setattr(fetch, "_session", lambda: SimpleNamespace(get=f))  # MV-5: Session を差し替える
         return f
     fetch.last_error = None
     return install
@@ -140,3 +141,31 @@ def test_theaters_410_means_not_showing_there(fake):
     fake({"https://eiga.com/movie-pref/100001/13/": FakeResp(410, "<html>gone</html>")})
     assert fetch.fetch_theaters("100001", "13") == []
     assert fetch.last_error is None
+
+
+# ---- MV-5: thread ごとの Session を使い回し、ConnectionError で捨てる ----
+def test_session_is_reused_in_same_thread_and_separate_per_thread():
+    import threading
+    fetch._drop_session()
+    a = fetch._session()
+    assert fetch._session() is a
+    other = []
+    t = threading.Thread(target=lambda: other.append(fetch._session()))
+    t.start()
+    t.join()
+    assert other and other[0] is not a
+    assert a.headers["User-Agent"] == fetch.USER_AGENT
+    fetch._drop_session()
+    assert fetch._session() is not a
+
+
+def test_connection_error_drops_session(monkeypatch):
+    fetch._drop_session()
+    s = fetch._session()
+    def boom(*a, **k):
+        raise requests.exceptions.ConnectionError("x")
+    monkeypatch.setattr(s, "get", boom)
+    soup, status = fetch._get("https://eiga.com/now/all/rank/", 5)
+    assert soup is None and status == 0
+    assert fetch.last_error["kind"] == "net"
+    assert fetch._session() is not s

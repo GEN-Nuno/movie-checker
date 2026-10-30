@@ -15,6 +15,7 @@ eiga.com から現在上映中の映画を取得し、ウォッチリストと�
  2026-10-30 に書き起こした物。元の .py は見つからなかった。行の並びと名前は
  bytecode のとおり、コメントと docstring は書き起こしの際に足した)
 """
+import os
 import sys
 import threading
 import tkinter as tk
@@ -22,9 +23,10 @@ import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
-from moviecheck import fetch, notify, store
+from moviecheck import fetch, notify, paths, store
+from moviecheck.version import __version__
 from mail_dialog import MailSettingsDialog
 from moviecheck.fetch import (  # noqa: F401 — 画面が使う名前 (置き場だけ変えた)
     EIGA_BASE, PREFECTURES,
@@ -35,12 +37,15 @@ from moviecheck.match import normalize, find_match, suggest_score, ranked_sugges
 from moviecheck.store import load_json, save_json
 
 # ---- 置き場 (exe なら exe の隣、源なら .py の隣) ----
-if getattr(sys, "frozen", False):
-    APP_DIR = Path(sys.executable).parent
-    _BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+_FROZEN = bool(getattr(sys, "frozen", False))
+if _FROZEN:
+    EXE_DIR = Path(sys.executable).parent
+    _BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", EXE_DIR))
 else:
-    APP_DIR = Path(__file__).parent
-    _BUNDLE_DIR = APP_DIR
+    EXE_DIR = Path(__file__).parent
+    _BUNDLE_DIR = EXE_DIR
+# データの置き場 (MV-4): exe の隣に json があれば隣、無ければ %APPDATA%\映画チェッカー。源からは .py の隣
+APP_DIR = paths.data_dir(EXE_DIR, _FROZEN)
 
 ICON_FILE = _BUNDLE_DIR / "movie_icon.ico"
 WATCHLIST_FILE = APP_DIR / "watchlist.json"
@@ -341,7 +346,7 @@ class RegionSelector(tk.Toplevel):
 class MovieApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("映画上映チェッカー")
+        self.root.title(f"映画上映チェッカー {__version__}")
         self.root.geometry("1160x750")
         self.root.minsize(1000, 600)
         self.root.configure(bg=C["bg"])
@@ -376,6 +381,7 @@ class MovieApp:
         self._build_ui()
         self._refresh_wl()
         self._show_store_notes()
+        self.root.after(100, self._maybe_import_old_data)
         self.root.after(300, self._startup_fetch)
 
     def _setup_styles(self):
@@ -407,6 +413,8 @@ class MovieApp:
                   padx=10, pady=3, bd=0, command=self._open_region_selector).pack(side="left")
         tk.Button(pf, text="✉ メール", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=self._open_mail_settings).pack(side="left", padx=(8, 0))
+        tk.Button(pf, text=f"ⓘ {__version__}", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+                  padx=10, pady=3, bd=0, command=self._open_about).pack(side="left", padx=(8, 0))
         self._update_pref_label()
 
         self.status_lbl = tk.Label(hdr, text="", font=self.F["caption"], fg=C["text3"], bg=C["card"])
@@ -645,6 +653,64 @@ class MovieApp:
 
         entry.bind("<FocusIn>", fi)
         entry.bind("<FocusOut>", fo)
+
+    # ---- 版と置き場 (MV-4) ----
+    def _about_text(self) -> str:
+        bi = paths.build_info(_BUNDLE_DIR)
+        lines = [f"映画上映チェッカー {__version__}"]
+        if bi:
+            lines.append(f"固めた日: {bi.get('built', '?')}  ({bi.get('python', '?')})")
+        else:
+            lines.append("源から動かしています (固めていない)")
+        lines.append(f"データの置き場: {APP_DIR}")
+        lines.append(f"記録: {APP_DIR / 'notify_log.json'}")
+        if _FROZEN and APP_DIR != EXE_DIR:
+            lines.append(f"exe: {EXE_DIR}")
+        return "\n".join(lines)
+
+    def _open_about(self):
+        win = tk.Toplevel(self.root)
+        win.title("この版について")
+        win.configure(bg=C["card"])
+        win.resizable(False, False)
+        win.transient(self.root)
+        tk.Label(win, text=self._about_text(), font=self.F["small"], fg=C["text"], bg=C["card"], justify="left").pack(padx=20, pady=(16, 8), anchor="w")
+        bf = tk.Frame(win, bg=C["card"])
+        bf.pack(fill="x", padx=20, pady=(0, 16))
+        tk.Button(bf, text="置き場を開く", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+                  padx=10, pady=3, bd=0, command=lambda: os.startfile(str(APP_DIR))).pack(side="left")
+        tk.Button(bf, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
+                  padx=14, pady=3, bd=0, command=win.destroy).pack(side="right")
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 120
+        win.geometry(f"+{x}+{y}")
+
+    def _maybe_import_old_data(self):
+        """初回 (置き場が空) に、以前の exe の隣の json を取り込むか聞く。元は消さない。源から動かす時は聞かない。"""
+        if not _FROZEN or APP_DIR == EXE_DIR or not paths.is_empty(APP_DIR):
+            return
+        if not messagebox.askyesno("以前のデータ", "まだ観たい映画のデータがありません。\n以前の 映画チェッカー.exe の隣にある json (watchlist.json など) を取り込みますか?\n\n取り込み先: " + str(APP_DIR), parent=self.root):
+            self._status(f"置き場: {APP_DIR}")
+            return
+        d = filedialog.askdirectory(title="以前の 映画チェッカー.exe があるフォルダ", parent=self.root)
+        if not d:
+            self._status(f"置き場: {APP_DIR}")
+            return
+        copied, notes = paths.import_from(Path(d), APP_DIR)
+        if copied:
+            self.watchlist = load_json(WATCHLIST_FILE)
+            self.dir_watchlist = load_json(DIR_WL_FILE)
+            self.settings = load_json(SETTINGS_FILE) or self.settings
+            if "pref_codes" not in self.settings:
+                self.settings["pref_codes"] = ["13"]
+            self._update_pref_label()
+            self._refresh_wl()
+        msg = f"{len(copied)} 件を取り込みました ({', '.join(copied)})" if copied else "取り込める json がありませんでした"
+        if notes:
+            msg += " / " + " / ".join(notes)
+        self._status(("✅ " if copied else "⚠ ") + msg)
+        messagebox.showinfo("以前のデータ", msg, parent=self.root)  # 状態欄は直後の取得で上書きされるので窓でも出す
 
     def _show_store_notes(self):
         """json が壊れていて退避から戻した等の訳 (moviecheck.store) を状態欄に。"""
