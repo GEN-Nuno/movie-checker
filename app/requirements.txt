@@ -1,4 +1,20 @@
-PyQt5==5.15.10
-requests==2.31.0
-beautifulsoup4==4.12.2
-lxml==4.9.3
+# Runtime dependencies, pinned (MV-3). ASCII only: pip-audit reads this file with the
+# console code page (cp932) and Japanese comments break it. Notes are in L3_詳細.md.
+# direct
+requests==2.34.2
+beautifulsoup4==4.15.0
+keyring==25.7.0
+# under requests
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+# under beautifulsoup4
+soupsieve==3.0.4
+typing_extensions==4.16.0
+# under keyring
+jaraco.classes==3.4.0
+jaraco.context==6.1.2
+jaraco.functools==4.6.0
+more-itertools==11.2.1
+pywin32-ctypes==0.2.3
