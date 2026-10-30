@@ -15,12 +15,13 @@ from .match import find_match
 from .store import load_json, save_json
 from . import taste
 
+# 語は 2026-10-30 に上映中 220 件のあらすじの頻度表を見て選んだ (MV-12)。思い付きで足さない (picks.word_counts で数える)
 MOODS = {
     "おまかせ": [],
-    "笑いたい": ["コメディ", "笑", "爆笑", "ユーモア", "ドタバタ", "痛快"],
-    "泣きたい": ["感動", "涙", "愛", "絆", "別れ", "喪失", "家族"],
-    "迫力": ["アクション", "戦", "バトル", "冒険", "サスペンス", "スリル", "スペクタクル", "ホラー"],
-    "静かに": ["日常", "静か", "ドラマ", "人生", "ドキュメンタリー", "青春", "記憶", "詩"],
+    "笑いたい": ["コメディ", "笑", "爆笑", "ユーモア", "ドタバタ", "痛快", "奇想天外", "コミカル", "愉快", "喜劇", "ギャグ", "軽快", "ハートフル", "ポップ"],
+    "泣きたい": ["感動", "涙", "愛", "絆", "別れ", "喪失", "家族", "再会", "奇跡", "孤独", "ヒューマンドラマ", "運命", "親子", "母", "父"],
+    "迫力": ["アクション", "戦", "バトル", "冒険", "サスペンス", "スリル", "スペクタクル", "ホラー", "恐怖", "復讐", "犯罪", "刑事", "捜査", "事件", "逃亡", "スリラー", "怪獣", "激動", "パニック"],
+    "静かに": ["日常", "静か", "ドラマ", "人生", "ドキュメンタリー", "青春", "記憶", "詩", "日記", "田舎", "自然", "旅", "風景", "暮らし", "穏やか", "京都", "音楽"],
 }
 N_PICKS = 3
 
@@ -34,6 +35,29 @@ def mood_filter(movies: list[dict], mood: str) -> tuple[list[dict], str]:
     if not kept:
         return list(movies), f"『{mood}』の物は見つからず、おまかせで"
     return kept, ""
+
+
+def mood_counts(movies: list[dict]) -> dict[str, int]:
+    """気分ごとに残る件数 (ボタンの字に)。おまかせは全部。"""
+    out = {}
+    for mood, words in MOODS.items():
+        if not words:
+            out[mood] = len(movies)
+        else:
+            out[mood] = sum(1 for m in movies if any(w in (m.get("synopsis") or "") + (m.get("title") or "") for w in words))
+    return out
+
+
+def word_counts(movies: list[dict], top: int = 200) -> list[tuple[str, int]]:
+    """あらすじの語 (漢字 2〜4・カナ 2+) が何本に出るか (MOODS の語を選ぶ材料)。"""
+    import re
+    from collections import Counter
+    tok = re.compile(r"[\u4e00-\u9fff]{2,4}|[\u30a0-\u30ff\u30fc]{2,}")
+    c: Counter = Counter()
+    for m in movies:
+        for w in set(tok.findall(m.get("synopsis") or "")):
+            c[w] += 1
+    return c.most_common(top)
 
 
 def wl_showing_titles(watchlist: list, dir_watchlist: list, now_showing: dict) -> dict[str, str]:

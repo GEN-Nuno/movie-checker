@@ -128,8 +128,9 @@ def digest_due(cfg: dict, state: dict, now: datetime) -> bool:
 
 # ---- 文面 ----
 def build_message(new_items: list[dict], all_items: list[dict], pref_codes: list[str],
-                  theaters_fn: Callable[[str, list[str]], dict] | None, kind: str) -> tuple[str, str, str]:
-    """(件名, テキスト, HTML)。kind = change | digest | test。"""
+                  theaters_fn: Callable[[str, list[str]], dict] | None, kind: str,
+                  picks: list[dict] | None = None, glow: str = "") -> tuple[str, str, str]:
+    """(件名, テキスト, HTML)。kind = change | digest | test。picks / glow は digest の頭 (MV-10)。"""
     today = datetime.now().strftime("%Y-%m-%d")
     if kind == "test":
         subject = "[映画チェッカー] 試しの送信"
@@ -140,6 +141,35 @@ def build_message(new_items: list[dict], all_items: list[dict], pref_codes: list
     else:
         subject = f"[映画チェッカー] 今週のまとめ ({today}) — 上映中 {len(all_items)} 本"
     tl, hl = [], []
+    if kind == "digest" and (picks or glow):
+        if glow:
+            tl.append(glow)
+            hl.append(f"<p><b>{htmlmod.escape(glow)}</b></p>")
+        if picks:
+            tl.append("■ 今夜のあなたに")
+            hl.append("<h3>今夜のあなたに</h3><ul>")
+            for pk in picks:
+                m = pk.get("movie") or {}
+                d = f"（{m['director']}）" if m.get("director") else ""
+                th = ""
+                if theaters_fn and m.get("movie_id") and pref_codes:
+                    try:
+                        got = theaters_fn(m["movie_id"], [list(pref_codes)[0]])
+                        first = next(iter(got.values()), [])
+                        th = first[0]["name"] if first else ""
+                    except Exception:
+                        th = ""
+                tl.append(f"・{m.get('title', '')}{d}  {pk.get('reason', '')}" + (f"  📍 {th}" if th else ""))
+                if m.get("url"):
+                    tl.append(f"   {m['url']}")
+                h = f"<li><b>{htmlmod.escape(m.get('title', ''))}</b>{htmlmod.escape(d)} <small>{htmlmod.escape(pk.get('reason', ''))}</small>"
+                if th:
+                    h += f"<br><small>📍 {htmlmod.escape(th)}</small>"
+                if m.get("url"):
+                    h += f' <a href="{htmlmod.escape(m["url"])}">eiga.com</a>'
+                hl.append(h + "</li>")
+            hl.append("</ul>")
+        tl.append("")
     if new_items:
         tl.append("■ 新しく上映になった物")
         hl.append("<h3>新しく上映になった物</h3><ul>")
@@ -219,7 +249,7 @@ def send(cfg: dict, password: str, subject: str, text: str, html: str) -> str:
 
 # ---- まとめて 1 回 ----
 def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, now_showing: dict,
-        kind: str = "auto", theaters_fn=None, send_fn=None, now: datetime | None = None) -> dict:
+        kind: str = "auto", theaters_fn=None, send_fn=None, now: datetime | None = None, picks_fn=None) -> dict:
     """kind: auto (変化があれば / まとめの日なら) | digest (今すぐまとめ) | test (試し)。
     戻り {sent: bool, count: int, error: str, why: str}。記録は notify_log.json、送った物は notify_state.json。"""
     now = now or datetime.now()
@@ -267,7 +297,13 @@ def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, no
     password = get_password(cfg["user"])
     if password is None:
         return record(real_kind, 0, "パスワードが資格情報にありません (設定で保存)")
-    subject, text, html = build_message(chosen, items, settings.get("pref_codes", ["13"]), theaters_fn, real_kind)
+    picks_, glow = [], ""
+    if real_kind == "digest" and picks_fn:
+        try:
+            picks_, glow = picks_fn()
+        except Exception:   # 景色は添え物。失敗しても送る
+            picks_, glow = [], ""
+    subject, text, html = build_message(chosen, items, settings.get("pref_codes", ["13"]), theaters_fn, real_kind, picks_, glow)
     err = send_fn(cfg, password, subject, text, html)
     if err:
         return record(real_kind, len(chosen), err)

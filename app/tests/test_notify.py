@@ -139,3 +139,30 @@ def test_next_digest_and_recent_log(tmp_path):
     assert notify.log_line(got[0]).startswith("c  試し  ⚠ 認証") and "✅ 2 件" in notify.log_line(got[1])
     assert "(変化なし)" in notify.log_line({"at": "a", "kind": "skip", "why": "変化なし"})
     assert notify.recent_log(tmp_path / "none") == []
+
+
+# ---- MV-10: まとめの頭 ----
+def test_digest_has_picks_and_glow_on_top():
+    pk = [{"movie": {"title": "怪物", "director": "是枝裕和", "movie_id": "9", "url": "https://eiga.com/movie/9/"}, "reason": "なぜ: 監督 是枝裕和 +1.2"}]
+    th = lambda mid, prefs: {"東京": [{"name": "シネマA", "url": ""}]}
+    subject, text, html = notify.build_message([], [], ["13", "23"], th, "digest", pk, "今週: 監督 是枝裕和 に惹かれています (観たい 2)")
+    assert text.startswith("今週: 監督 是枝裕和") and "■ 今夜のあなたに" in text and "📍 シネマA" in text and "https://eiga.com/movie/9/" in text
+    assert "<h3>今夜のあなたに</h3>" in html and "怪物" in html
+    _, text2, _ = notify.build_message([], [], ["13"], None, "change", pk, "x")
+    assert "今夜のあなたに" not in text2
+
+
+def test_run_digest_calls_picks_fn_and_survives_failure(tmp_path):
+    settings = {"mail": {"to": "a@b.c", "host": "h", "port": 465, "user": "u", "mode": "ssl", "on_change": True, "weekly": {"enabled": True, "weekday": 0, "hour": 8}}}
+    sent = {}
+    def send_fn(cfg, pw, subject, text, html):
+        sent["text"] = text
+        return ""
+    import moviecheck.notify as n
+    n.get_password = lambda user: "pw"
+    boom = lambda: (_ for _ in ()).throw(RuntimeError("x"))
+    r = notify.run(settings, tmp_path, [], [], {"怪物": {"title": "怪物"}}, kind="digest", send_fn=send_fn, picks_fn=boom)
+    assert r["sent"] and "今夜のあなたに" not in sent["text"]
+    r = notify.run(settings, tmp_path, [], [], {"怪物": {"title": "怪物"}}, kind="digest", send_fn=send_fn,
+                   picks_fn=lambda: ([{"movie": {"title": "怪物"}, "reason": "人気 1 位"}], "今週: 1 本に反応"))
+    assert r["sent"] and sent["text"].startswith("今週: 1 本に反応") and "■ 今夜のあなたに" in sent["text"]

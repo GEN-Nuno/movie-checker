@@ -298,14 +298,56 @@ def fetch_theaters(movie_id: str, pref_code: str) -> list[dict]:
     return theaters
 
 
-def fetch_theaters_multi(movie_id: str, pref_codes: list[str]) -> dict[str, list[dict]]:
+def fetch_theaters_multi(movie_id: str, pref_codes: list[str], data_dir=None) -> dict[str, list[dict]]:
     result = {}
     for code in pref_codes:
         name = PREFECTURES.get(code, code)
-        theaters = fetch_theaters(movie_id, code)
+        theaters = theaters_cached(movie_id, code, data_dir) if data_dir else fetch_theaters(movie_id, code)
         if theaters:
             result[name] = theaters
     return result
+
+
+# ---- 劇場の 1 日キャッシュ (MV-11): theaters_cache.json {date, items: {"id/pref": [館]}} ----
+THEATERS_CACHE = "theaters_cache.json"
+
+
+def _load_theaters_cache(data_dir, today: str) -> dict:
+    from .store import load_json
+    from pathlib import Path
+    d = load_json(Path(data_dir) / THEATERS_CACHE)
+    if isinstance(d, dict) and d.get("date") == today and isinstance(d.get("items"), dict):
+        return d
+    return {"date": today, "items": {}}
+
+
+def theaters_cached(movie_id: str, pref_code: str, data_dir, now=None) -> list[dict]:
+    """今日の物があれば (空も含めて) 返す。無ければ fetch_theaters して書く (ネットの失敗は書かない)。"""
+    from datetime import datetime
+    from .store import save_json
+    from pathlib import Path
+    today = (now or datetime.now()).strftime("%Y-%m-%d")
+    cache = _load_theaters_cache(data_dir, today)
+    key = f"{movie_id}/{pref_code}"
+    if key in cache["items"]:
+        return list(cache["items"][key])
+    theaters = fetch_theaters(movie_id, pref_code)
+    if not theaters and last_error and last_error.get("kind") == "net":
+        return theaters
+    cache["items"][key] = theaters
+    try:
+        save_json(Path(data_dir) / THEATERS_CACHE, cache)
+    except OSError:
+        pass
+    return theaters
+
+
+def clear_theaters_cache(data_dir) -> None:
+    from pathlib import Path
+    try:
+        (Path(data_dir) / THEATERS_CACHE).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def search_eiga(query: str, max_pages: int = 2) -> list[dict]:

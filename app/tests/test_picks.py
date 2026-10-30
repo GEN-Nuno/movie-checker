@@ -67,3 +67,11 @@ def test_afterglow_counts_recent_positive_feedback():
     assert picks.afterglow(fb, ns, now) == "今週: 監督 A に惹かれています (観たい 1・👍 1)"
     assert picks.afterglow(fb[:1], ns, now) == "今週: 1 本に反応 (観たい 1)"
     assert picks.afterglow([], ns, now) == ""
+
+
+def test_mood_counts_and_word_counts():
+    ms = _movies()
+    c = picks.mood_counts(ms)
+    assert c["おまかせ"] == 5 and c["笑いたい"] == 1 and c["迫力"] >= 1
+    wc = dict(picks.word_counts(ms))
+    assert wc.get("家族") == 1 and wc.get("コメディ") == 1

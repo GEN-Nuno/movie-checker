@@ -881,7 +881,8 @@ class MovieApp:
     def run_notify(self, kind: str = "auto") -> dict:
         """別スレッドから呼ぶ。kind = auto | digest | test。戻りは notify.run の物。"""
         return notify.run(self.settings, APP_DIR, list(self.watchlist), list(self.dir_watchlist), dict(self.now_showing),
-                          kind=kind, theaters_fn=fetch_theaters_multi)
+                          kind=kind, theaters_fn=lambda mid, prefs: fetch_theaters_multi(mid, prefs, APP_DIR),
+                          picks_fn=lambda: self._picks_for_mail(dict(self.now_showing), list(self.watchlist), list(self.dir_watchlist)))
 
     def data_dir(self) -> Path:
         return APP_DIR
@@ -929,6 +930,14 @@ class MovieApp:
         self.bar_lbl.config(text="  ·  ".join(parts))
 
     # ---- 好みの学習 (MV-8) ----
+    def _picks_for_mail(self, now_showing: dict, wl: list, dwl: list):
+        """まとめメールの頭 (MV-10): おまかせで 3 本と余韻。self が None でも動く (--send-mail)。"""
+        model = self.taste if self is not None else taste.Model(TASTE_FILE)
+        today = datetime.now().strftime("%Y-%m-%d")
+        reasons = picks.wl_showing_titles(wl, dwl, now_showing)
+        chosen = picks.choose(list(now_showing.values()), reasons, model, picks.load_dismissed(APP_DIR, today))
+        return chosen, picks.afterglow(model.feedback, now_showing)
+
     def _taste_feedback(self, movie: dict, kind: str):
         rank = None
         if movie.get("title") in self.now_showing:
@@ -1045,7 +1054,8 @@ class MovieApp:
         if cache and cache.get("movies"):
             try:
                 last_dt = datetime.strptime(cache["updated"], "%Y-%m-%d %H:%M")
-                if datetime.now() - last_dt < timedelta(hours=6):
+                has_synopsis = any(m.get("synopsis") for m in cache["movies"])
+                if datetime.now() - last_dt < timedelta(hours=6) and has_synopsis:   # 古い形 (あらすじ無し) は取り直す (MV-12)
                     self.now_showing = {m["title"]: m for m in cache["movies"]}
                     self._on_data_ready(cache=True, ts=cache["updated"])
                     if self.watchlist:
@@ -1093,6 +1103,7 @@ class MovieApp:
     def _fetch_movies(self):
         if self.is_fetching:
             return
+        fetch.clear_theaters_cache(APP_DIR)   # 取り直しの意思 (MV-11)
         self.is_fetching = True
         self._status("📡 eiga.com から映画情報を取得中...")
         self._show_progress(True)
@@ -1191,9 +1202,13 @@ class MovieApp:
             self.picks_toggle.config(text="▼ 札を出す")
 
     def _paint_moods(self):
+        counts = picks.mood_counts(list(self.now_showing.values())) if self.now_showing else {}
         for mood, b in self.mood_btns.items():
             on = mood == self._mood
-            b.config(bg=C["accent"] if on else C["bg3"], fg="white" if on else C["text2"])
+            n = counts.get(mood)
+            label = mood if (n is None or mood == "おまかせ") else f"{mood} {n}"
+            fg = "white" if on else (C["text3"] if n == 0 else C["text2"])
+            b.config(text=label, bg=C["accent"] if on else C["bg3"], fg=fg)
 
     def _set_mood(self, mood: str):
         self._mood = mood
@@ -1220,6 +1235,7 @@ class MovieApp:
             self.picks_note.config(text="上映中の一覧がまだありません")
             return
         today = datetime.now().strftime("%Y-%m-%d")
+        self._paint_moods()
         movies, note = picks.mood_filter(list(self.now_showing.values()), self._mood)
         wl = picks.wl_showing_titles(self.watchlist, self.dir_watchlist, self.now_showing)
         self._picks = picks.choose(movies, wl, self.taste, picks.load_dismissed(APP_DIR, today))
@@ -1272,7 +1288,7 @@ class MovieApp:
                 dest = POSTERS_DIR / f"{mid}.jpg"
                 if fetch.fetch_poster(m["image"], dest):
                     path = dest
-            th = fetch.fetch_theaters(mid, pref) if mid.isdigit() else []
+            th = fetch.theaters_cached(mid, pref, APP_DIR) if mid.isdigit() else []
             name = th[0]["name"] if th else ""
             self.root.after(0, lambda mv=m, p_=path, nm=name: self._apply_card_extras(mv, p_, nm))
 
@@ -2091,7 +2107,7 @@ class MovieApp:
 
         def load_theaters():
             def work():
-                result = fetch_theaters_multi(movie_id, pref_codes)
+                result = fetch_theaters_multi(movie_id, pref_codes, APP_DIR)
                 popup.after(0, lambda: show(result))
 
             threading.Thread(target=work, daemon=True).start()
@@ -2198,7 +2214,9 @@ def _send_mail_cli() -> int:
         _say("取得できませんでした: " + (fetch.error_text(200) or "0 件"))
         return 2
     save_json(CACHE_FILE, {"updated": datetime.now().strftime("%Y-%m-%d %H:%M"), "movies": list(now_showing.values())})
-    r = notify.run(settings, APP_DIR, wl, dwl, now_showing, kind="auto", theaters_fn=fetch_theaters_multi)
+    r = notify.run(settings, APP_DIR, wl, dwl, now_showing, kind="auto",
+                   theaters_fn=lambda mid, prefs: fetch_theaters_multi(mid, prefs, APP_DIR),
+                   picks_fn=lambda: MovieApp._picks_for_mail(None, now_showing, wl, dwl))
     if r.get("error"):
         _say("メール: " + r["error"])
         return 1

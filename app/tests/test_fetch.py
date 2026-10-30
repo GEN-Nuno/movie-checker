@@ -169,3 +169,31 @@ def test_connection_error_drops_session(monkeypatch):
     assert soup is None and status == 0
     assert fetch.last_error["kind"] == "net"
     assert fetch._session() is not s
+
+
+# ---- MV-11: 劇場の 1 日キャッシュ ----
+THEATER_HTML2 = '<h3><a href="/movie-theater/1/">シネマA</a></h3><h3><a href="/movie-theater/2/">シネマB</a></h3>'
+
+
+def test_theaters_cached_reads_once_per_day_and_caches_empty(tmp_path, fake):
+    from datetime import datetime
+    url = "https://eiga.com/movie-pref/5/13/"
+    f = fake({url: FakeResp(200, THEATER_HTML2), "https://eiga.com/movie-pref/5/23/": FakeResp(410, "")})
+    d1 = datetime(2026, 10, 30, 10, 0)
+    got = fetch.theaters_cached("5", "13", tmp_path, now=d1)
+    assert [t["name"] for t in got] == ["シネマA", "シネマB"]
+    assert fetch.theaters_cached("5", "13", tmp_path, now=d1) == got and f.calls.count(url) == 1
+    assert fetch.theaters_cached("5", "23", tmp_path, now=d1) == [] and fetch.theaters_cached("5", "23", tmp_path, now=d1) == []
+    assert f.calls.count("https://eiga.com/movie-pref/5/23/") == 1          # 空 (410) もキャッシュ
+    fetch.theaters_cached("5", "13", tmp_path, now=datetime(2026, 10, 31, 10, 0))
+    assert f.calls.count(url) == 2                                              # 日付が変わると取り直す
+    assert fetch.fetch_theaters_multi("5", ["13"], tmp_path) == {"東京": got}
+    fetch.clear_theaters_cache(tmp_path)
+    assert not (tmp_path / "theaters_cache.json").exists()
+
+
+def test_theaters_cached_does_not_cache_network_failure(tmp_path, fake):
+    f = fake({"https://eiga.com/movie-pref/5/13/": requests.exceptions.ConnectionError("x")})
+    assert fetch.theaters_cached("5", "13", tmp_path) == []
+    assert not (tmp_path / "theaters_cache.json").exists()
+    assert len(f.calls) == 1
