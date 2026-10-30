@@ -262,22 +262,26 @@ class AutocompleteEntry(tk.Entry):
 class RegionSelector(tk.Toplevel):
     """チェックボタンで複数都道府県を選択するダイアログ"""
 
-    def __init__(self, master, current_codes: list[str], on_save):
+    def __init__(self, master, current_codes: list[str], on_save, F=None):
         super().__init__(master)
-        self.title("地域選択")
+        F = F or {}
+        f_h, f_body, f_small, f_btn = (F.get("h2") or ("Segoe UI Semibold", 12)), (F.get("normal") or ("Segoe UI", 10)), (F.get("small") or ("Segoe UI", 9)), (F.get("btn") or ("Segoe UI", 10))
+        self.title("地域")
         self.geometry("520x520")
         self.configure(bg=C["bg"])
         self.transient(master)
         self.grab_set()
         self._on_save = on_save
+        self.bind("<Return>", lambda e: self._save())
+        self.bind("<Escape>", lambda e: self.destroy())
         self._vars = {}
 
         hdr = tk.Frame(self, bg=C["bg"], pady=12)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="劇場検索する地域を選択", font=("Segoe UI", 14, "bold"),
+        tk.Label(hdr, text="劇場を探す地域", font=f_h,
                  fg=C["text"], bg=C["bg"]).pack(padx=20, anchor="w")
         tk.Label(hdr, text="複数選択可能。劇場ポップアップで表示される地域です。",
-                 font=("Segoe UI", 10), fg=C["text2"], bg=C["bg"]).pack(padx=20, anchor="w")
+                 font=f_small, fg=C["text2"], bg=C["bg"]).pack(padx=24, anchor="w")
 
         sep = tk.Frame(self, bg=C["separator"], height=1)
         sep.pack(fill="x", padx=20)
@@ -293,7 +297,7 @@ class RegionSelector(tk.Toplevel):
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
 
         for region_name, codes in REGION_GROUPS:
-            tk.Label(sf, text=region_name, font=("Segoe UI", 11, "bold"),
+            tk.Label(sf, text=region_name, font=f_body,
                      fg=C["text"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(14, 4))
             row = tk.Frame(sf, bg=C["bg"])
             row.pack(fill="x", padx=12)
@@ -304,22 +308,22 @@ class RegionSelector(tk.Toplevel):
                     row, text=PREFECTURES[code], variable=var,
                     bg=C["bg"], fg=C["text"], selectcolor=C["bg2"],
                     activebackground=C["bg"], activeforeground=C["accent"],
-                    font=("Segoe UI", 10),
+                    font=f_body,
                 )
                 cb.grid(row=i // 4, column=i % 4, sticky="w", padx=4, pady=2)
 
         bf = tk.Frame(self, bg=C["bg"])
         bf.pack(fill="x", padx=20, pady=12)
-        tk.Button(bf, text="保存", font=("Segoe UI", 11, "bold"), bg=C["accent"], fg="white",
+        tk.Button(bf, text="保存", font=f_btn, bg=C["accent"], fg="white",
                   relief="flat", cursor="hand2", bd=0, padx=20, pady=6,
                   command=self._save).pack(side="right", padx=(8, 0))
-        tk.Button(bf, text="キャンセル", font=("Segoe UI", 10), bg=C["bg3"], fg=C["text2"],
+        tk.Button(bf, text="キャンセル", font=f_btn, bg=C["bg3"], fg=C["text2"],
                   relief="flat", cursor="hand2", bd=0, padx=16, pady=6,
                   command=self.destroy).pack(side="right")
-        tk.Button(bf, text="全解除", font=("Segoe UI", 9), bg=C["bg3"], fg=C["text3"],
+        tk.Button(bf, text="全解除", font=f_small, bg=C["bg3"], fg=C["text2"],
                   relief="flat", cursor="hand2", bd=0, padx=10, pady=4,
                   command=self._clear_all).pack(side="left")
-        tk.Button(bf, text="関東選択", font=("Segoe UI", 9), bg=C["bg3"], fg=C["text3"],
+        tk.Button(bf, text="関東", font=f_small, bg=C["bg3"], fg=C["text2"],
                   relief="flat", cursor="hand2", bd=0, padx=10, pady=4,
                   command=self._select_kanto).pack(side="left", padx=(8, 0))
         self._canvas = canvas
@@ -355,6 +359,8 @@ class MovieApp:
         self.root.title(f"映画上映チェッカー {__version__}")
         self.root.geometry("1160x750")
         self.root.minsize(1000, 600)
+        self._bind_shortcuts()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.configure(bg=C["bg"])
         if ICON_FILE.exists():
             try:
@@ -396,6 +402,7 @@ class MovieApp:
             "caption": tkfont.Font(family="Segoe UI", size=9),
         }
         self._setup_styles()
+        self._restore_window()
         self._build_ui()
         self._refresh_wl()
         self._show_store_notes()
@@ -704,7 +711,7 @@ class MovieApp:
 
     def _open_about(self):
         win = tk.Toplevel(self.root)
-        win.title("この版について")
+        win.title("情報")
         win.configure(bg=C["card"])
         win.resizable(False, False)
         win.transient(self.root)
@@ -897,6 +904,59 @@ class MovieApp:
             return f'"{sys.executable}" --send-mail'
         return f'"{sys.executable}" "{Path(__file__).resolve()}" --send-mail'
 
+    # ---- 近道と窓の記憶 (MV-14、HIG macOS) ----
+    def _bind_shortcuts(self):
+        r = self.root
+        r.bind_all("<Control-f>", lambda e: self._focus_search())
+        r.bind_all("<Control-F>", lambda e: self._focus_search())
+        r.bind_all("<F5>", lambda e: self._fetch_movies())
+        r.bind_all("<Delete>", self._on_delete_key)
+        r.bind_all("<Escape>", self._on_escape)
+
+    def _focus_search(self):
+        e = getattr(self, "search_entry", None)
+        if e is None:
+            return
+        e.focus_set()
+        if getattr(e, "_has_ph", False):
+            e.delete(0, "end")
+            e.config(fg=C["text"])
+            e._has_ph = False
+
+    def _on_delete_key(self, event=None):
+        """焦点が WL の表にある時だけ削除 (入力欄の Delete は字の削除のまま)。"""
+        w = self.root.focus_get()
+        if w is getattr(self, "wl_tree", None):
+            self._remove_movie()
+        elif w is getattr(self, "dir_wl_tree", None):
+            self._remove_dir_from_wl()
+
+    def _on_escape(self, event=None):
+        """一番手前の窓 (Toplevel) を閉じる。地域の窓は自分で Esc を持つ。"""
+        tops = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel) and w.winfo_viewable()]
+        if tops:
+            tops[-1].destroy()
+
+    def _restore_window(self):
+        g = str(self.settings.get("window") or "")
+        try:
+            size, x, y = g.split("+")
+            w, h = (int(v) for v in size.split("x"))
+            x, y = int(x), int(y)
+        except ValueError:
+            return
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        if 0 <= x < sw - 200 and 0 <= y < sh - 200 and w >= 1000 and h >= 600:
+            self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _on_close(self):
+        try:
+            self.settings["window"] = self.root.geometry()
+            self.save_settings()
+        except Exception:  # noqa: BLE001 — 閉じる邪魔はしない
+            pass
+        self.root.destroy()
+
     # ---- 状況の帯 (MV-7) ----
     def refresh_bar(self):
         """題名の下の 1 行。主スレッドから呼ぶ (別スレッドは root.after で)。"""
@@ -986,7 +1046,7 @@ class MovieApp:
 
     def _open_taste(self):
         win = tk.Toplevel(self.root)
-        win.title("好み (手元で学んだ物)")
+        win.title("好み")
         win.configure(bg=C["bg"])
         win.transient(self.root)
         f = tk.Frame(win, bg=C["bg"], padx=16, pady=12)
@@ -1039,7 +1099,7 @@ class MovieApp:
         threading.Thread(target=work, daemon=True).start()
 
     def _open_region_selector(self):
-        RegionSelector(self.root, self.pref_codes, self._on_regions_saved)
+        RegionSelector(self.root, self.pref_codes, self._on_regions_saved, F=self.F)
 
     def _on_regions_saved(self, codes: list[str]):
         self.settings["pref_codes"] = codes
@@ -2090,7 +2150,7 @@ class MovieApp:
         pref_names = [PREFECTURES.get(c, c) for c in pref_codes]
 
         popup = tk.Toplevel(self.root)
-        popup.title(f"{title} - 劇場検索")
+        popup.title(f"劇場: {title}")
         popup.geometry("600x580")
         popup.configure(bg=C["bg"])
         popup.transient(self.root)

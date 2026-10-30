@@ -27,6 +27,7 @@ if (-not $iscc) { throw "Inno Setup がありません:  winget install JRSoftwa
 $dist = Join-Path $root "dist"
 $work = Join-Path $root "build"
 $setup = Join-Path $dist "映画チェッカー-setup-$Version.exe"
+$setupTmp = Join-Path $work "setup\映画チェッカー-setup-$Version.exe"   # Inno は build\setup に出す (MV-15)
 if (Test-Path $setup) { throw "同じ版の setup.exe が既にあります: $setup`napp\moviecheck\version.py の版数を上げてください" }
 
 if (-not $Python) {
@@ -77,11 +78,12 @@ Write-Host "== 5/6 Inno Setup"
 # 110 (EndUpdateResource) はアンチウイルスとの競合で、数秒待って同じ事をやり直すと通る (moviAI / Master で踏んだ)
 foreach ($try in 1..3) {
     & $iscc "/DAppVersion=$Version" "/Q" (Join-Path $PSScriptRoot "installer.iss")
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $setup)) { break }
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $setupTmp)) { break }
     Write-Host "   Inno Setup が失敗 ($try 回目)。10 秒待ってやり直す" -ForegroundColor Yellow
     Start-Sleep -Seconds 10
 }
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw "Inno Setup が 3 回失敗しました (110 ならアンチウイルスの除外に dist を足す)" }
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setupTmp)) { throw "Inno Setup が 3 回失敗しました (110 ならアンチウイルスの除外に dist と build を足す)" }
+Move-Item -Force $setupTmp $setup
 
 Write-Host "== 6/6 記録"
 $sizeOne = (Get-Item $exeOne).Length

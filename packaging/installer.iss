@@ -18,7 +18,8 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-OutputDir=..\dist
+; dist の外に出す (MV-15: アンチウイルスが dist を掴んで 110 になるのを避ける)。build.ps1 が dist へ移す
+OutputDir=..\build\setup
 OutputBaseFilename=映画チェッカー-setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
