@@ -22,6 +22,7 @@ HEADERS = {"User-Agent": USER_AGENT}
 POSTER_BASE = "https://media.eiga.com/"   # ポスターはここからだけ (MV-9)
 RELEASE_PAGES = 10                          # 公開日順の全作品のページ数の上限 (MV-19)
 TOTAL_PAGES = 11 + RELEASE_PAGES            # 進捗の最大
+COMING_MONTHS = 3                           # 公開予定を見る月数 (MV-22)
 POSTER_MAX_BYTES = 500 * 1024
 _local = threading.local()  # thread ごとの Session (MV-5: keep-alive)
 SKIP_TEXTS = {"予告編・動画", "レビュー", "作品情報", "作品", "映画館を探す"}
@@ -379,6 +380,66 @@ def fetch_theater_movies(theater_url: str) -> list[dict]:
     if not out:
         _set_error("empty", "映画館のページに作品が見つかりません (形が変わった?)", theater_url)
     return out
+
+
+# ---- 公開予定 (MV-22): /coming/YYYYMM/ の見出し『YYYY年M月D日（曜）公開・配信開始』の後に div.list-block ----
+_COMING_DATE = re.compile(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日")   # 2027 年のページは『2027年 1月1日 （金）』と空白が入る
+_STREAM_HEAD = re.compile(r"^[^。]{1,20}で.{0,12}配信")
+
+
+def _coming_months(now=None, months: int = COMING_MONTHS) -> list[str]:
+    from datetime import datetime
+    d = now or datetime.now()
+    y, m = d.year, d.month
+    out = []
+    for _ in range(months):
+        out.append(f"{y}{m:02d}")
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return out
+
+
+def fetch_coming(months: int = COMING_MONTHS, now=None) -> list[dict]:
+    """公開予定 [{title, movie_id, url, image, release 'YYYY-MM-DD', stream}]。今月から months か月。404 は飛ばす。1 本も無ければ []。"""
+    out: list[dict] = []
+    seen: set[str] = set()
+    ok_any = False
+    for ym in _coming_months(now, months):
+        url = f"{EIGA_BASE}/coming/{ym}/"
+        try:
+            resp = _session().get(url, headers=HEADERS, timeout=15)
+        except requests.RequestException as e:
+            _set_error("net", f"公開予定の取得に失敗 ({type(e).__name__})", url)
+            continue
+        if resp.status_code != 200:
+            continue
+        ok_any = True
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for block in soup.select("div.list-block"):
+            a = block.select_one("h3.title a[href]") or block.select_one(".txt-box a[href]")
+            if not a:
+                continue
+            mid = re.search(r"/movie/(\d+)/", a.get("href", ""))
+            title = a.get_text(strip=True)
+            if not mid or not title or title in seen:
+                continue
+            head = block.find_previous(lambda t: t.name in ("h2", "h3", "h4") and _COMING_DATE.search(t.get_text()))
+            dm = _COMING_DATE.search(head.get_text()) if head else None
+            release = f"{int(dm.group(1)):04d}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}" if dm else ""
+            txt = block.select_one("p.txt")
+            stream = bool(txt and _STREAM_HEAD.search(txt.get_text(strip=True)))
+            img = block.select_one("img[src]")
+            seen.add(title)
+            out.append({"title": title, "movie_id": mid.group(1), "url": f"{EIGA_BASE}/movie/{mid.group(1)}/",
+                        "image": img.get("src", "") if img else "", "release": release, "stream": stream})
+    if ok_any and not out:
+        _set_error("parse", "公開予定のページの形が変わった?", f"{EIGA_BASE}/coming/")
+    return out
+
+
+def coming_cached(data_dir, now=None) -> list[dict]:
+    return _cached("coming", lambda: fetch_coming(now=now), data_dir, now)
 
 
 def theater_list_cached(pref_code: str, data_dir, now=None) -> list[dict]:

@@ -5,3 +5,13 @@ __pycache__/
 .venv-build/
 build/
 dist/
+
+# 個人のデータ (MV-21): 源から動かすと app/ の隣に出来る。exe は %APPDATA%\映画チェッカー
+app/*.json
+app/posters/
+app/*.log
+*.tmp
+# 試験・固める時の中間
+.pytest_cache/
+app/.pytest_cache/
+app/tests/__pycache__/

@@ -237,3 +237,33 @@ def test_now_showing_adds_release_pages(fake):
     assert len(titles) == 3 and len(titles) == len(set(titles))   # 同じ 3 本が重複しない
     assert fetch.last_error is None
     assert "https://eiga.com/now/all/release/" in f.calls
+
+
+COMING_HTML = """<html><body><section>
+<h2 class="title">2026年11月3日（火）公開・配信開始</h2>
+<div class="list-block" id="mv1"><div class="img-box"><a href="/movie/1/"><img alt="劇場の作品" src="https://media.eiga.com/a.jpg"></a></div>
+<div class="txt-box"><h3 class="title"><a href="/movie/1/">劇場の作品</a></h3><p class="txt">説明の文。</p></div></div>
+<div class="list-block" id="mv2"><div class="txt-box"><h3 class="title"><a href="/movie/2/">配信の作品</a></h3><p class="txt">Netflixで2026年11月3日から配信。</p></div></div>
+<h2 class="title">2026年11月14日（金）公開・配信開始</h2>
+<div class="list-block" id="mv3"><div class="txt-box"><h3 class="title"><a href="/movie/3/">後の作品</a></h3><p class="txt">x</p></div></div>
+</section></body></html>"""
+
+
+def test_fetch_coming_reads_release_date_and_stream(monkeypatch):
+    """MV-22: 見出しの日付が release、Netflix の文は stream、404 の月は飛ばす。"""
+    from datetime import datetime
+    calls = []
+
+    def fake_get(url, **k):
+        calls.append(url)
+        if "202612" in url:
+            return SimpleNamespace(status_code=404, text="")
+        return SimpleNamespace(status_code=200, text=COMING_HTML)
+
+    monkeypatch.setattr(fetch, "_session", lambda: SimpleNamespace(get=fake_get))
+    got = fetch.fetch_coming(months=2, now=datetime(2026, 11, 1))
+    assert [u.rsplit("/", 2)[1] for u in calls] == ["202611", "202612"]
+    assert [(g["title"], g["release"], g["stream"]) for g in got] == [
+        ("劇場の作品", "2026-11-03", False), ("配信の作品", "2026-11-03", True), ("後の作品", "2026-11-14", False)]
+    assert got[0]["movie_id"] == "1" and got[0]["image"] == "https://media.eiga.com/a.jpg"
+    assert fetch._coming_months(datetime(2026, 12, 5), 3) == ["202612", "202701", "202702"]

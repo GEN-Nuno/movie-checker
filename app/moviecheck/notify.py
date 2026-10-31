@@ -139,6 +139,33 @@ def mark_known(data_dir: Path, items: list[dict], now: datetime | None = None) -
     save_json(state_p, state)
 
 
+def coming_items(watchlist: list, coming: list[dict], today: str = "") -> list[dict]:
+    """WL の題名を公開予定に当てる (MV-22)。戻り [{title, release, url, movie_id, director, stream}] を公開日順。過ぎた物と日付の無い物は出さない。"""
+    by_title = {c.get("title", ""): c for c in coming or [] if c.get("title")}
+    by_id = {str(c.get("movie_id")): c for c in coming or [] if c.get("movie_id")}
+    out = []
+    for w in watchlist or []:
+        c = by_id.get(str(w.get("movie_id") or "")) if w.get("movie_id") else None
+        if c is None:
+            mt = find_match(w.get("title", ""), by_title)
+            c = by_title.get(mt) if mt else None
+        if not c or not c.get("release") or (today and c["release"] < today):
+            continue
+        out.append({"title": w.get("title", ""), "release": c["release"], "url": c.get("url", ""), "movie_id": c.get("movie_id", ""),
+                    "director": w.get("director", ""), "stream": bool(c.get("stream"))})
+    out.sort(key=lambda x: x["release"])
+    return out
+
+
+def release_label(release: str, stream: bool = False) -> str:
+    """'2026-11-14' → '11/14 公開' (配信なら '11/14 配信')。"""
+    try:
+        m, d = int(release[5:7]), int(release[8:10])
+    except (ValueError, IndexError):
+        return ""
+    return f"{m}/{d} " + ("配信" if stream else "公開")
+
+
 def changes(items: list[dict], state: dict) -> list[dict]:
     """前回送った物 (state.sent) に無い物。"""
     sent = state.get("sent") or {}
@@ -157,8 +184,8 @@ def digest_due(cfg: dict, state: dict, now: datetime) -> bool:
 # ---- 文面 ----
 def build_message(new_items: list[dict], all_items: list[dict], pref_codes: list[str],
                   theaters_fn: Callable[[str, list[str]], dict] | None, kind: str,
-                  picks: list[dict] | None = None, glow: str = "") -> tuple[str, str, str]:
-    """(件名, テキスト, HTML)。kind = change | digest | test。picks / glow は digest の頭 (MV-10)。"""
+                  picks: list[dict] | None = None, glow: str = "", coming: list[dict] | None = None) -> tuple[str, str, str]:
+    """(件名, テキスト, HTML)。kind = change | digest | test。picks / glow は digest の頭 (MV-10)、coming は digest の『公開予定』(MV-22)。"""
     today = datetime.now().strftime("%Y-%m-%d")
     if kind == "test":
         subject = "[映画チェッカー] 試しの送信"
@@ -197,6 +224,19 @@ def build_message(new_items: list[dict], all_items: list[dict], pref_codes: list
                     h += f' <a href="{htmlmod.escape(m["url"])}">eiga.com</a>'
                 hl.append(h + "</li>")
             hl.append("</ul>")
+        tl.append("")
+    if kind == "digest" and coming:
+        tl.append("■ 公開予定 (ウォッチリスト)")
+        hl.append("<h3>公開予定 (ウォッチリスト)</h3><ul>")
+        for c in coming:
+            d = f"（{c['director']}）" if c.get("director") else ""
+            lab = release_label(c.get("release", ""), c.get("stream", False))
+            tl.append(f"・{c.get('title', '')}{d}  {lab}" + (f"\n   {c['url']}" if c.get("url") else ""))
+            h = f"<li><b>{htmlmod.escape(c.get('title', ''))}</b>{htmlmod.escape(d)} {htmlmod.escape(lab)}"
+            if c.get("url"):
+                h += f' <a href="{htmlmod.escape(c["url"])}">eiga.com</a>'
+            hl.append(h + "</li>")
+        hl.append("</ul>")
         tl.append("")
     if new_items:
         tl.append("■ 新しく上映になった物")
@@ -278,8 +318,8 @@ def send(cfg: dict, password: str, subject: str, text: str, html: str) -> str:
 # ---- まとめて 1 回 ----
 def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, now_showing: dict,
         kind: str = "auto", theaters_fn=None, send_fn=None, now: datetime | None = None, picks_fn=None,
-        theater_wl: list | None = None) -> dict:
-    """kind: auto (変化があれば / まとめの日なら) | digest (今すぐまとめ) | test (試し)。
+        theater_wl: list | None = None, coming: list[dict] | None = None) -> dict:
+    """kind: auto (変化があれば / まとめの日なら) | digest (今すぐまとめ) | test (試し)。coming は coming_items の戻り (MV-22)。
     戻り {sent: bool, count: int, error: str, why: str}。記録は notify_log.json、送った物は notify_state.json。"""
     now = now or datetime.now()
     cfg = cfg_of(settings)
@@ -332,7 +372,7 @@ def run(settings: dict, data_dir: Path, watchlist: list, dir_watchlist: list, no
             picks_, glow = picks_fn()
         except Exception:   # 景色は添え物。失敗しても送る
             picks_, glow = [], ""
-    subject, text, html = build_message(chosen, items, settings.get("pref_codes", ["13"]), theaters_fn, real_kind, picks_, glow)
+    subject, text, html = build_message(chosen, items, settings.get("pref_codes", ["13"]), theaters_fn, real_kind, picks_, glow, coming)
     err = send_fn(cfg, password, subject, text, html)
     if err:
         return record(real_kind, len(chosen), err)

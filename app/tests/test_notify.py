@@ -180,3 +180,20 @@ def test_theater_wl_items_and_mark_known(tmp_path):
     thw[0]["movies"].append({"title": "C", "movie_id": "3"})
     items2 = notify.showing_items([], [], {}, thw)
     assert [i["key"] for i in notify.changes(items2, state)] == ["th:ユーロスペース:3"]
+
+
+def test_coming_items_and_digest_section():
+    """MV-22: WL を公開予定に当てる (id 優先・題名の照合・過ぎた物と日付無しは出さない・公開日順)、digest に『公開予定』の段。"""
+    coming = [{"title": "後の作品", "movie_id": "3", "url": "https://eiga.com/movie/3/", "release": "2026-11-14", "stream": False},
+              {"title": "配信の作品", "movie_id": "2", "url": "https://eiga.com/movie/2/", "release": "2026-11-03", "stream": True},
+              {"title": "過ぎた物", "movie_id": "4", "url": "", "release": "2026-10-01", "stream": False},
+              {"title": "日付無し", "movie_id": "5", "url": "", "release": "", "stream": False}]
+    wl = [{"title": "後の作品", "director": "A"}, {"title": "配信の作品 ", "movie_id": "2"}, {"title": "過ぎた物"}, {"title": "日付無し"}, {"title": "無関係"}]
+    got = notify.coming_items(wl, coming, today="2026-10-31")
+    assert [(g["title"], g["release"], g["stream"]) for g in got] == [("配信の作品 ", "2026-11-03", True), ("後の作品", "2026-11-14", False)]
+    assert notify.release_label("2026-11-14") == "11/14 公開" and notify.release_label("2026-11-03", True) == "11/3 配信" and notify.release_label("") == ""
+    subject, text, html = notify.build_message([], [], ["13"], None, "digest", coming=got)
+    assert "■ 公開予定 (ウォッチリスト)" in text and "・後の作品（A）  11/14 公開" in text and "11/3 配信" in text
+    assert "<h3>公開予定 (ウォッチリスト)</h3>" in html
+    _, text2, _ = notify.build_message([], [], ["13"], None, "change", coming=got)
+    assert "公開予定" not in text2

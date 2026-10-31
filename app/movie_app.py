@@ -1,19 +1,15 @@
 """
-🎬 映画上映チェッカー v3.0
-eiga.com から現在上映中の映画を取得し、ウォッチリストと照合するデスクトップアプリ
+映画チェッカー (movie_app)
+eiga.com から上映中・公開予定の映画を取り、ウォッチリスト (映画・監督・映画館) と照らし合わせるデスクトップ アプリ。
+画面はこの file、取得・照合・通知・好み・おすすめは moviecheck/ (版は moviecheck/version.py)。
 
 機能:
-  - 起動時に上映情報を自動取得（キャッシュが6時間以内なら再利用）
-  - バックグラウンドで6時間ごとに自動更新
-  - ウォッチリストの映画が上映中か一目でわかる
-  - 上映中の映画をダブルクリック → 地域の映画館ポップアップ
-  - 複数都道府県で地域を絞り込み
-  - 上映中リストからワンクリックでウォッチリスト追加
-  - 監督名を表示・オートコンプリートで入力
+  - 起動時に上映情報を取る (キャッシュが 6 時間以内なら再利用)。裏で 6 時間ごとに取り直す
+  - ウォッチリストの映画が上映中か、まだなら公開日がいつか
+  - 上映中の一覧のダブルクリック → 地域の映画館の窓
+  - おすすめの札 (気分・好みの学習)、映画館のウォッチリスト、メールの通知、dark / light
 
-(この源は 映画チェッカー.exe (PyInstaller、Python 3.10) の bytecode から
- 2026-10-30 に書き起こした物。元の .py は見つからなかった。行の並びと名前は
- bytecode のとおり、コメントと docstring は書き起こしの際に足した)
+(元は 映画チェッカー.exe (PyInstaller、Python 3.10) の bytecode から 2026-10-30 に書き起こした物。以後の改修は本棚 movie.json の MV-1〜)
 """
 import os
 import sys
@@ -438,6 +434,7 @@ class MovieApp:
         self._mood = "おまかせ"             # 今日はどんな気分? (MV-9)
         self._picks = []
         self._picks_seen = set()          # 『次の候補』で除く題名 (その場だけ、MV-20)
+        self._coming = []                 # 公開予定 (MV-22、取得のスレッドで coming_cached)
         self._poster_imgs = {}
         self._pick_cards = []
         # 字体 (MV-13、HIG typography): 1 書体、4 段。細字なし。太字は見出し (h) と札の題名 (strong) だけ
@@ -814,8 +811,8 @@ class MovieApp:
         self.wl_tree.heading("title", text="タイトル")
         self.wl_tree.heading("director", text="監督")
         self.wl_tree.heading("info", text="")
-        self.wl_tree.column("status", width=80, minwidth=60, anchor="center")
-        self.wl_tree.column("title", width=220, minwidth=120)
+        self.wl_tree.column("status", width=104, minwidth=90, anchor="center")   # 『📅 11/14 配信』が入る幅 (MV-22)
+        self.wl_tree.column("title", width=200, minwidth=120)
         self.wl_tree.column("director", width=120, minwidth=80)
         self.wl_tree.column("info", width=90, minwidth=60, anchor="center")
         sc = ttk.Scrollbar(tf, orient="vertical", command=self.wl_tree.yview)
@@ -1181,7 +1178,8 @@ class MovieApp:
         return notify.run(self.settings, APP_DIR, list(self.watchlist), list(self.dir_watchlist), dict(self.now_showing),
                           kind=kind, theaters_fn=lambda mid, prefs: fetch_theaters_multi(mid, prefs, APP_DIR),
                           picks_fn=lambda: self._picks_for_mail(dict(self.now_showing), list(self.watchlist), list(self.dir_watchlist), list(self.theater_wl)),
-                          theater_wl=list(self.theater_wl))
+                          theater_wl=list(self.theater_wl),
+                          coming=notify.coming_items(list(self.watchlist), list(self._coming), datetime.now().strftime("%Y-%m-%d")))
 
     def data_dir(self) -> Path:
         return APP_DIR
@@ -1440,6 +1438,7 @@ class MovieApp:
         def work():
             ms = fetch_now_showing()
             d = _merge_ranking(ms, fetch_ranking())
+            self._coming = fetch.coming_cached(APP_DIR)   # MV-22
             self.root.after(0, lambda: self._on_auto_done(d))
 
         threading.Thread(target=work, daemon=True).start()
@@ -1470,6 +1469,7 @@ class MovieApp:
 
             ms = fetch_now_showing(progress_cb=prog)
             d = _merge_ranking(ms, fetch_ranking())
+            self._coming = fetch.coming_cached(APP_DIR)   # MV-22
             self.root.after(0, lambda: self._on_fetch_done(d))
 
         threading.Thread(target=work, daemon=True).start()
@@ -1860,7 +1860,7 @@ class MovieApp:
         for item in self.watchlist:
             st = item.get("status", "⏳ 未チェック")
             director = item.get("director", "")
-            info = "🎬 劇場を検索 →" if "上映中" in st else item.get("added_date", "")
+            info = "🎬 劇場を検索 →" if "上映中" in st else ("作品ページ →" if st.startswith("📅") else item.get("added_date", ""))
             self.wl_tree.insert("", "end", values=(st, item["title"], director, info))
         if self._left_mode == "movie":
             self.wl_cnt.config(text=f"{len(self.watchlist)}件")
@@ -2114,6 +2114,7 @@ class MovieApp:
 
                 ms = fetch_now_showing(progress_cb=prog)
                 d = _merge_ranking(ms, fetch_ranking())
+                self._coming = fetch.coming_cached(APP_DIR)   # MV-22
                 self.root.after(0, lambda: self._on_fetch_then_dir_check(d))
 
             threading.Thread(target=work, daemon=True).start()
@@ -2369,6 +2370,7 @@ class MovieApp:
 
                 ms = fetch_now_showing(progress_cb=prog)
                 d = _merge_ranking(ms, fetch_ranking())
+                self._coming = fetch.coming_cached(APP_DIR)   # MV-22
                 self.root.after(0, lambda: self._on_fetch_then_check(d))
 
             threading.Thread(target=work, daemon=True).start()
@@ -2411,6 +2413,16 @@ class MovieApp:
                 else:
                     item["status"] = "⚪ 上映終了"
                 item.pop("matched_title", None)
+                item.pop("release", None)
+        # 公開予定 (MV-22): 上映中でない物に『📅 11/14 公開』。取れていなければ何も付けない
+        today = datetime.now().strftime("%Y-%m-%d")
+        for c in notify.coming_items(self.watchlist, self._coming, today):
+            for item in self.watchlist:
+                if item.get("title") == c["title"] and "上映中" not in item.get("status", ""):
+                    item["status"] = "📅 " + notify.release_label(c["release"], c["stream"])
+                    item["release"] = c["release"]
+                    if not item.get("movie_id") and c.get("movie_id"):
+                        item["movie_id"], item["url"] = c["movie_id"], c.get("url", "")
         save_json(WATCHLIST_FILE, self.watchlist)
         self._refresh_wl()
         self._status(f"✅ {showing}/{len(self.watchlist)}件が上映中")
@@ -2636,6 +2648,7 @@ def _send_mail_cli() -> int:
     dwl = load_json(DIR_WL_FILE)
     ms = fetch_now_showing()
     now_showing = _merge_ranking(ms, fetch_ranking())
+    coming = fetch.coming_cached(APP_DIR)                                   # MV-22 (1 日キャッシュ)
     if not now_showing:
         _say("取得できませんでした: " + (fetch.error_text(200) or "0 件"))
         return 2
@@ -2650,7 +2663,8 @@ def _send_mail_cli() -> int:
         save_json(THEATER_WL_FILE, thw)
     r = notify.run(settings, APP_DIR, wl, dwl, now_showing, kind="auto",
                    theaters_fn=lambda mid, prefs: fetch_theaters_multi(mid, prefs, APP_DIR),
-                   picks_fn=lambda: MovieApp._picks_for_mail(None, now_showing, wl, dwl, thw), theater_wl=thw)
+                   picks_fn=lambda: MovieApp._picks_for_mail(None, now_showing, wl, dwl, thw), theater_wl=thw,
+                   coming=notify.coming_items(wl, coming, datetime.now().strftime("%Y-%m-%d")))
     if r.get("error"):
         _say("メール: " + r["error"])
         return 1
