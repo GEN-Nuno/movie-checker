@@ -1,12 +1,21 @@
 # 映画チェッカー
 
-観たい映画が「いま映画館でやっているか」「いつ公開か」を、代わりに毎日見ておいてくれる Windows のアプリです。映画.com (eiga.com) の情報を使います。個人で使う無料の物で、広告も会員登録もありません。
+観たい映画が「いま映画館でやっているか」「いつ公開か」を、代わりに毎日見ておいてくれる Windows / Mac のアプリです。映画.com (eiga.com) の情報を使います。個人で使う無料の物で、広告も会員登録もありません。
 
 ## 入れ方
 
 1. [Releases](../../releases) から `映画チェッカー-setup-x.x.x.exe` をダウンロードして開きます。
 2. 青い画面 (SmartScreen) が出たら『詳細情報』→『実行』。個人が作ったアプリなので初回だけ止められます。
 3. スタート メニューの『映画チェッカー』から起動します。新しい版も同じ手順で上書きできます。
+
+## Mac で使う
+
+1. [Releases](../../releases) から `MovieChecker-x.x.x-mac-arm64.dmg` (Apple Silicon の Mac 用。Intel の Mac は未対応) をダウンロードして開きます。
+2. 『映画チェッカー』を『Applications』へドラッグします。
+3. 初回は署名が無いため「開発元を確認できません」と出ます。Finder で右クリック →『開く』→『開く』で起動できます (2 回目からは普通に開けます)。
+4. メールのパスワードは Mac のキーチェーンに保存します。初回に「キーチェーンへのアクセス」を聞かれたら『常に許可』を選びます。
+
+保存先は `~/Library/Application Support/映画チェッカー` です。Windows 版と同じ json なので、フォルダごと写せばそのまま引き継げます。
 
 ## 使い方
 
@@ -18,8 +27,8 @@
 
 ## 安心のために
 
-- 登録した映画や好みは、あなたの PC の中 (`%APPDATA%\映画チェッカー`) にだけ保存します。どこにも送りません。
-- メールのパスワードは Windows の資格情報に保存し、ファイルには書きません。
+- 登録した映画や好みは、あなたの PC の中 (Windows: `%APPDATA%\映画チェッカー`、Mac: `~/Library/Application Support/映画チェッカー`) にだけ保存します。どこにも送りません。
+- メールのパスワードは Windows の資格情報 (Mac はキーチェーン) に保存し、ファイルには書きません。
 - インターネットに出るのは映画.com を見に行く時だけ (起動時と 6 時間ごと)。
 - アンインストールしても保存した物は残ります。消したい時はそのフォルダを削除してください。
 
@@ -43,6 +52,6 @@ cd app
 ..\.venv\Scripts\python -m pytest -q
 ```
 
-固める (setup.exe): `packaging\build.ps1` (版は `app/moviecheck/version.py` だけ上げる)。setup.exe は git に入れず Releases に付けます。源から動かした時のデータは `app/` の隣に出来て、`.gitignore` と `tests/test_repo.py` が git に入らないよう守っています。
+固める (setup.exe): `packaging\build.ps1` (版は `app/moviecheck/version.py` だけ上げる)。Mac (.app → dmg / zip): `bash packaging/build_mac.sh` (`brew install python@3.13 python-tk@3.13` が要る。流れは build.ps1 と同じで、固め方だけ `packaging/movie_mac.spec`)。setup.exe は git に入れず Releases に付けます。源から動かした時のデータは `app/` の隣に出来て、`.gitignore` と `tests/test_repo.py` が git に入らないよう守っています。
 
 決まり: 既存の挙動は変えずに足す。会社の情報は扱わない。鍵は json や源に書かない。外の AI には送らない。

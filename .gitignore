@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 .venv-build/
+.venv-build-mac/
 build/
 dist/
 
@@ -15,3 +16,4 @@ app/*.log
 .pytest_cache/
 app/.pytest_cache/
 app/tests/__pycache__/
+.DS_Store

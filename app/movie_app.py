@@ -48,6 +48,37 @@ else:
 # データの置き場 (MV-4): exe の隣に json があれば隣、無ければ %APPDATA%\映画チェッカー。源からは .py の隣
 APP_DIR = paths.data_dir(EXE_DIR, _FROZEN)
 
+
+def open_folder(path: Path) -> None:
+    """置き場を OS のファイラで開く。Windows は startfile、Mac は open。"""
+    if hasattr(os, "startfile"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    else:
+        import subprocess
+        subprocess.Popen(["open", str(path)])
+
+
+_MAC = sys.platform == "darwin"
+
+
+def ui_font(size: int, semibold: bool = False):
+    """字体の指定。Windows は今までどおり Segoe UI。Mac には Segoe UI が無く既定の字体に落ちて太字も消えるので、
+    システム字体に寄せ、Windows (96dpi) と見た目の大きさを揃えるため 3pt 足す。"""
+    if _MAC:
+        return (".AppleSystemUIFont", size + 3, "bold") if semibold else (".AppleSystemUIFont", size + 3)
+    return ("Segoe UI Semibold", size) if semibold else ("Segoe UI", size)
+
+
+def _tk_font(size: int, semibold: bool = False) -> "tkfont.Font":
+    spec = ui_font(size, semibold)
+    return tkfont.Font(family=spec[0], size=spec[1], weight="bold" if len(spec) > 2 else "normal")
+
+
+def wheel_units(e) -> int:
+    """ホイール 1 回分を xview_scroll / yview_scroll の units に。Windows の delta は ±120 刻み、Mac は ±1〜 (Tk が既に刻み数) なので、
+    // 120 すると Mac では正の向きが 0 になり片方向しか動かない。"""
+    return -e.delta if _MAC else -1 * (e.delta // 120)
+
 ICON_FILE = _BUNDLE_DIR / "movie_icon.ico"
 WATCHLIST_FILE = APP_DIR / "watchlist.json"
 DIR_WL_FILE = APP_DIR / "director_watchlist.json"
@@ -204,7 +235,7 @@ class AutocompleteEntry(tk.Entry):
             self._lb = tk.Listbox(
                 self._lb_win, bg=C["card"], fg=C["text"],
                 selectbackground=C["accent"], selectforeground="white",
-                font=("Segoe UI", 11), relief="flat", borderwidth=1,
+                font=ui_font(11), relief="flat", borderwidth=1,
                 activestyle="none",
             )
             self._lb.pack(fill="both", expand=True)
@@ -306,7 +337,7 @@ class RegionSelector(tk.Toplevel):
     def __init__(self, master, current_codes: list[str], on_save, F=None):
         super().__init__(master)
         F = F or {}
-        f_h, f_body, f_small, f_btn = (F.get("h2") or ("Segoe UI Semibold", 12)), (F.get("normal") or ("Segoe UI", 10)), (F.get("small") or ("Segoe UI", 9)), (F.get("btn") or ("Segoe UI", 10))
+        f_h, f_body, f_small, f_btn = (F.get("h2") or ui_font(12, semibold=True)), (F.get("normal") or ui_font(10)), (F.get("small") or ui_font(9)), (F.get("btn") or ui_font(10))
         self.title("地域")
         self.geometry("520x520")
         self.configure(bg=C["bg"])
@@ -335,7 +366,7 @@ class RegionSelector(tk.Toplevel):
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         sb.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(wheel_units(e), "units"))
 
         for region_name, codes in REGION_GROUPS:
             tk.Label(sf, text=region_name, font=f_body,
@@ -408,6 +439,12 @@ class MovieApp:
                 self.root.iconbitmap(str(ICON_FILE))
             except tk.TclError:
                 pass
+            if sys.platform == "darwin" and Image is not None and ImageTk is not None:
+                try:   # Mac は .ico を iconbitmap に渡せないので、PIL で読んで iconphoto に
+                    self._icon_img = ImageTk.PhotoImage(Image.open(ICON_FILE))
+                    self.root.iconphoto(True, self._icon_img)
+                except Exception:  # noqa: BLE001
+                    pass
         self.watchlist = load_json(WATCHLIST_FILE)
         self.dir_watchlist = load_json(DIR_WL_FILE)
         self.theater_wl = load_json(THEATER_WL_FILE)          # [{name, url, pref, area, movies, updated, error}] (MV-19)
@@ -439,13 +476,13 @@ class MovieApp:
         self._pick_cards = []
         # 字体 (MV-13、HIG typography): 1 書体、4 段。細字なし。太字は見出し (h) と札の題名 (strong) だけ
         self.F = {
-            "title": tkfont.Font(family="Segoe UI Semibold", size=14),
-            "h2": tkfont.Font(family="Segoe UI Semibold", size=16),
-            "strong": tkfont.Font(family="Segoe UI Semibold", size=10),
-            "normal": tkfont.Font(family="Segoe UI", size=10),
-            "small": tkfont.Font(family="Segoe UI", size=9),
-            "btn": tkfont.Font(family="Segoe UI", size=10),
-            "caption": tkfont.Font(family="Segoe UI", size=9),
+            "title": _tk_font(14, semibold=True),
+            "h2": _tk_font(16, semibold=True),
+            "strong": _tk_font(10, semibold=True),
+            "normal": _tk_font(10),
+            "small": _tk_font(9),
+            "btn": _tk_font(10),
+            "caption": _tk_font(9),
         }
         self._setup_styles()
         self._restore_window()
@@ -462,9 +499,9 @@ class MovieApp:
         for name in ("WL.Treeview", "NS.Treeview"):
             rh = 40 if name.startswith("WL") else 34
             s.configure(name, background=C["card"], foreground=C["text"], fieldbackground=C["card"],
-                        font=("Segoe UI", 10), rowheight=rh, borderwidth=0)
+                        font=ui_font(10), rowheight=rh, borderwidth=0)
             s.configure(f"{name}.Heading", background=C["bg3"], foreground=C["text2"],
-                        font=("Segoe UI", 9), borderwidth=0, relief="flat", padding=(8, 6))
+                        font=ui_font(9), borderwidth=0, relief="flat", padding=(8, 6))
             s.map(name, background=[("selected", C["sel_bg"])], foreground=[("selected", C["sel_fg"])])
             s.map(f"{name}.Heading", background=[("active", C["bg3"])])
         s.configure("Prog.Horizontal.TProgressbar", troughcolor=C["bg3"], background=C["accent"],
@@ -601,7 +638,7 @@ class MovieApp:
         row1.pack(fill="x", pady=(0, 6))
         tk.Label(row1, text="都道府県", font=self.F["small"], fg=C["text2"], bg=C["card"], width=7, anchor="w").pack(side="left")
         self._th_pref_var = tk.StringVar(value=PREFECTURES.get((self.pref_codes or ["13"])[0], "東京"))
-        self._th_pref_combo = ttk.Combobox(row1, textvariable=self._th_pref_var, state="readonly", font=("Segoe UI", 10), width=10,
+        self._th_pref_combo = ttk.Combobox(row1, textvariable=self._th_pref_var, state="readonly", font=ui_font(10), width=10,
                                            values=[PREFECTURES[c] for c in sorted(PREFECTURES, key=int)])
         self._th_pref_combo.pack(side="left", padx=(6, 0))
         self._th_pref_combo.bind("<<ComboboxSelected>>", lambda e: self._load_theater_choices())
@@ -611,7 +648,7 @@ class MovieApp:
         row2.pack(fill="x")
         tk.Label(row2, text="映画館", font=self.F["small"], fg=C["text2"], bg=C["card"], width=7, anchor="w").pack(side="left")
         self._th_var = tk.StringVar()
-        self._th_combo = ttk.Combobox(row2, textvariable=self._th_var, state="readonly", font=("Segoe UI", 10), width=28)
+        self._th_combo = ttk.Combobox(row2, textvariable=self._th_var, state="readonly", font=ui_font(10), width=28)
         self._th_combo.pack(side="left", fill="x", expand=True, padx=(6, 8))
         self._btn(row2, "追加", self._add_theater, C["accent"]).pack(side="right")
         self._th_choices = []
@@ -849,7 +886,7 @@ class MovieApp:
         self._dir_wl_filter_var = tk.StringVar(value="── すべて ──")
         self._dir_wl_filter_var.trace_add("write", lambda *a: self._refresh_dir_wl())
         self.dir_wl_combo = ttk.Combobox(ff, textvariable=self._dir_wl_filter_var, state="readonly",
-                                         font=("Segoe UI", 10), width=20)
+                                         font=ui_font(10), width=20)
         self.dir_wl_combo.pack(side="left")
         self._dir_wl_status = tk.Label(ff, text="", font=self.F["caption"], fg=C["text3"], bg=C["bg"])
         self._dir_wl_status.pack(side="right")
@@ -979,7 +1016,7 @@ class MovieApp:
         bf = tk.Frame(win, bg=C["card"])
         bf.pack(fill="x", padx=20, pady=(0, 16))
         tk.Button(bf, text="置き場を開く", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
-                  padx=10, pady=3, bd=0, command=lambda: os.startfile(str(APP_DIR))).pack(side="left")
+                  padx=10, pady=3, bd=0, command=lambda: open_folder(APP_DIR)).pack(side="left")
         tk.Button(bf, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
                   padx=14, pady=3, bd=0, command=win.destroy).pack(side="right")
         win.update_idletasks()
@@ -1195,6 +1232,9 @@ class MovieApp:
         r = self.root
         r.bind_all("<Control-f>", lambda e: self._focus_search())
         r.bind_all("<Control-F>", lambda e: self._focus_search())
+        if _MAC:  # Mac は ⌘F も
+            r.bind_all("<Command-f>", lambda e: self._focus_search())
+            r.bind_all("<Command-F>", lambda e: self._focus_search())
         r.bind_all("<F5>", lambda e: self._fetch_movies())
         r.bind_all("<Delete>", self._on_delete_key)
         r.bind_all("<Escape>", self._on_escape)
@@ -1580,7 +1620,7 @@ class MovieApp:
             self.rail.configure(height=h)
 
     def _on_rail_wheel(self, e):
-        self.rail.xview_scroll(-1 * (e.delta // 120), "units")
+        self.rail.xview_scroll(wheel_units(e), "units")
 
     def _scroll_rail(self, d: int):
         self.rail.xview_scroll(d, "units")
@@ -2572,7 +2612,7 @@ class MovieApp:
             canvas.configure(yscrollcommand=sb.set)
 
             def mwheel(e):
-                canvas.yview_scroll(-1 * (e.delta // 120), "units")
+                canvas.yview_scroll(wheel_units(e), "units")
 
             canvas.bind_all("<MouseWheel>", mwheel)
             idx = 0

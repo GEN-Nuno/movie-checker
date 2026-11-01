@@ -2,6 +2,7 @@
 『保存』『試しに送る』『今すぐまとめを送る』はタブの外にあり、3 タブの値をまとめて保存する。"""
 from __future__ import annotations
 
+import sys
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -146,15 +147,17 @@ class MailSettingsDialog(tk.Toplevel):
         ttk.Combobox(wk, textvariable=self.v["hour"], values=[str(h) for h in range(24)], width=3, state="readonly").pack(side="left", padx=(8, 2))
         tk.Label(wk, text="時以降 (その日 1 回)", font=self.font, fg=C["text2"], bg=C["bg"]).pack(side="left")
         wk.pack(anchor="w", pady=(4, 10))
-        tk.Label(f, text="送るのはアプリが動いている時です。閉じていても送るには、Windows のタスク スケジューラに次を登録します:",
+        _mac = sys.platform == "darwin"
+        tk.Label(f, text="送るのはアプリが動いている時です。閉じていても送るには、" + ("Mac の crontab に次を登録します:" if _mac else "Windows のタスク スケジューラに次を登録します:"),
                  font=self.small, fg=C["text2"], bg=C["bg"], wraplength=620, justify="left").pack(anchor="w")
         cmd = self.app.send_mail_command()
         e = tk.Entry(f, font=self.small, width=90, bg=C["input_bg"], fg=C["text"], insertbackground=C["text"], relief="flat", highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["accent"])
         e.insert(0, cmd)
         e.config(state="readonly")
         e.pack(anchor="w", pady=(4, 2))
-        tk.Label(f, text="タスク スケジューラ → 基本タスクの作成 → トリガー『毎日』(例: 8:00) → 操作『プログラムの開始』に上の行 (プログラム = exe、引数 = --send-mail)。"
-                         "取得 → 判定 → 送信 → 終了し、結果は『3. 記録』に残ります。",
+        tk.Label(f, text=("ターミナルで crontab -e を開き『0 8 * * * 上の行』を 1 行足します (毎日 8:00)。" if _mac else
+                          "タスク スケジューラ → 基本タスクの作成 → トリガー『毎日』(例: 8:00) → 操作『プログラムの開始』に上の行 (プログラム = exe、引数 = --send-mail)。")
+                         + "取得 → 判定 → 送信 → 終了し、結果は『3. 記録』に残ります。",
                  font=self.small, fg=C["text3"], bg=C["bg"], wraplength=620, justify="left").pack(anchor="w")
 
     # ---- タブ 3: 記録 ----

@@ -2,6 +2,7 @@
 
 - 源から動かす: .py の隣 (今までどおり)。
 - exe: 常に %APPDATA%\\映画チェッカー (無ければ作る。APPDATA が無い・書けない時だけ exe の隣)。MV-16 で隣の json があっても隣は使わない。
+- Mac の .app: ~/Library/Application Support/映画チェッカー (APPDATA が無い時の Mac の既定)。
 - 初回 (置き場に DATA_FILES が 1 つも無い) に exe の隣の json があれば黙って写す (import_from)。元は消さない。
 """
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 APP_NAME = "映画チェッカー"
@@ -22,7 +24,12 @@ def data_dir(app_dir: Path, frozen: bool, appdata: str | None = None) -> Path:
     app_dir = Path(app_dir)
     if not frozen:
         return app_dir
-    base = appdata if appdata is not None else os.environ.get("APPDATA", "")
+    if appdata is not None:
+        base = appdata
+    else:
+        base = os.environ.get("APPDATA", "")
+        if not base and sys.platform == "darwin":   # Mac の .app (試験は appdata を渡すのでここは通らない)
+            base = str(Path.home() / "Library" / "Application Support")
     if not base:
         return app_dir
     d = Path(base) / APP_NAME
