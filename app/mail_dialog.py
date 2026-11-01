@@ -8,6 +8,8 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
+from macui import Button  # Mac は色が効く平らなボタン、Windows は tk.Button
+
 from moviecheck import notify
 
 FIELD_HELP = {
@@ -64,7 +66,7 @@ class MailSettingsDialog(tk.Toplevel):
         tk.Label(bf, text="保存は 3 つのタブの値をまとめて書きます", font=self.small, fg=C["text3"], bg=C["bg"]).pack(side="left")
 
         def btn(text, cmd, primary=False):
-            return tk.Button(bf, text=text, font=app.F["btn"], bg=C["accent"] if primary else C["bg3"], fg="white" if primary else C["text2"],
+            return Button(bf, text=text, font=app.F["btn"], bg=C["accent"] if primary else C["bg3"], fg="white" if primary else C["text2"],
                              relief="flat", cursor="hand2", bd=0, padx=12, pady=5, command=cmd)
 
         btn("閉じる", self.destroy).pack(side="right", padx=4)
@@ -79,7 +81,7 @@ class MailSettingsDialog(tk.Toplevel):
         pf = tk.Frame(f, bg=C["bg"])
         pf.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 10))
         for name in notify.PRESETS:
-            tk.Button(pf, text=name, font=self.small, bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2", bd=0, padx=10, pady=3,
+            Button(pf, text=name, font=self.small, bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2", bd=0, padx=10, pady=3,
                       command=lambda n=name: self._apply_preset(n)).pack(side="left", padx=(0, 6))
 
         left = tk.Frame(f, bg=C["bg"])

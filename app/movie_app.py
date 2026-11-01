@@ -22,6 +22,8 @@ from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
+from macui import Button  # Mac は色が効く平らなボタン、Windows は tk.Button
+
 from moviecheck import fetch, notify, paths, picks, store, taste
 try:  # ポスター (MV-9)。無ければ灰色の枠
     from PIL import Image, ImageTk
@@ -368,6 +370,10 @@ class RegionSelector(tk.Toplevel):
         sb.pack(side="right", fill="y")
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(wheel_units(e), "units"))
 
+        if _MAC:
+            st = ttk.Style()
+            st.configure("Region.TCheckbutton", font=f_body, background=C["bg"], foreground=C["text"], indicatorcolor=C["input_bg"])
+            st.map("Region.TCheckbutton", background=[("active", C["bg"])], foreground=[("active", C["accent"])], indicatorcolor=[("selected", C["accent"])])
         for region_name, codes in REGION_GROUPS:
             tk.Label(sf, text=region_name, font=f_body,
                      fg=C["text"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(14, 4))
@@ -376,26 +382,29 @@ class RegionSelector(tk.Toplevel):
             for i, code in enumerate(codes):
                 var = tk.BooleanVar(value=code in current_codes)
                 self._vars[code] = var
-                cb = tk.Checkbutton(
-                    row, text=PREFECTURES[code], variable=var,
-                    bg=C["bg"], fg=C["text"], selectcolor=C["bg2"],
-                    activebackground=C["bg"], activeforeground=C["accent"],
-                    font=f_body,
-                )
+                if _MAC:  # Aqua は tk.Checkbutton の bg を無視するので、Tk 自身が描く ttk (clam) に。色は下の Region.TCheckbutton
+                    cb = ttk.Checkbutton(row, text=PREFECTURES[code], variable=var, style="Region.TCheckbutton")
+                else:
+                    cb = tk.Checkbutton(
+                        row, text=PREFECTURES[code], variable=var,
+                        bg=C["bg"], fg=C["text"], selectcolor=C["bg2"],
+                        activebackground=C["bg"], activeforeground=C["accent"],
+                        font=f_body,
+                    )
                 cb.grid(row=i // 4, column=i % 4, sticky="w", padx=4, pady=2)
 
         bf = tk.Frame(self, bg=C["bg"])
         bf.pack(fill="x", padx=20, pady=12)
-        tk.Button(bf, text="保存", font=f_btn, bg=C["accent"], fg="white",
+        Button(bf, text="保存", font=f_btn, bg=C["accent"], fg="white",
                   relief="flat", cursor="hand2", bd=0, padx=20, pady=6,
                   command=self._save).pack(side="right", padx=(8, 0))
-        tk.Button(bf, text="キャンセル", font=f_btn, bg=C["bg3"], fg=C["text2"],
+        Button(bf, text="キャンセル", font=f_btn, bg=C["bg3"], fg=C["text2"],
                   relief="flat", cursor="hand2", bd=0, padx=16, pady=6,
                   command=self.destroy).pack(side="right")
-        tk.Button(bf, text="全解除", font=f_small, bg=C["bg3"], fg=C["text2"],
+        Button(bf, text="全解除", font=f_small, bg=C["bg3"], fg=C["text2"],
                   relief="flat", cursor="hand2", bd=0, padx=10, pady=4,
                   command=self._clear_all).pack(side="left")
-        tk.Button(bf, text="関東", font=f_small, bg=C["bg3"], fg=C["text2"],
+        Button(bf, text="関東", font=f_small, bg=C["bg3"], fg=C["text2"],
                   relief="flat", cursor="hand2", bd=0, padx=10, pady=4,
                   command=self._select_kanto).pack(side="left", padx=(8, 0))
         self._canvas = canvas
@@ -534,7 +543,7 @@ class MovieApp:
         pf.pack(side="right", padx=24)
 
         def hbtn(text, cmd):
-            return tk.Button(pf, text=text, font=self.F["btn"], bg=C["hdr_bg"], fg=C["hdr_fg2"], activebackground=C["hdr_btn"], activeforeground=C["hdr_fg"],
+            return Button(pf, text=text, font=self.F["btn"], bg=C["hdr_bg"], fg=C["hdr_fg2"], activebackground=C["hdr_btn"], activeforeground=C["hdr_fg"],
                              relief="flat", cursor="hand2", padx=10, pady=3, bd=0, command=cmd)
 
         tk.Label(pf, text="地域", font=self.F["small"], fg=C["hdr_fg2"], bg=C["hdr_bg"]).pack(side="left", padx=(0, 4))
@@ -576,15 +585,15 @@ class MovieApp:
 
         tab_bar = tk.Frame(p, bg=C["bg"])
         tab_bar.pack(fill="x", padx=10, pady=(10, 0))
-        self._ltab_btn_movie = tk.Button(
+        self._ltab_btn_movie = Button(
             tab_bar, text="映画", font=self.F["btn"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
             padx=14, pady=3, command=lambda: self._switch_left_tab("movie"))
         self._ltab_btn_movie.pack(side="left")
-        self._ltab_btn_dir = tk.Button(
+        self._ltab_btn_dir = Button(
             tab_bar, text="監督", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
             padx=14, pady=3, command=lambda: self._switch_left_tab("director"))
         self._ltab_btn_dir.pack(side="left", padx=(2, 0))
-        self._ltab_btn_th = tk.Button(
+        self._ltab_btn_th = Button(
             tab_bar, text="映画館", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
             padx=14, pady=3, command=lambda: self._switch_left_tab("theater"))
         self._ltab_btn_th.pack(side="left", padx=(2, 0))
@@ -967,7 +976,7 @@ class MovieApp:
 
     def _btn(self, parent, text, cmd, bg):
         fg = "white" if bg not in (C["bg3"],) else C["text2"]
-        return tk.Button(parent, text=text, font=self.F["btn"], bg=bg, fg=fg, activebackground=C["accent_hover"],
+        return Button(parent, text=text, font=self.F["btn"], bg=bg, fg=fg, activebackground=C["accent_hover"],
                          activeforeground="white", relief="flat", cursor="hand2", command=cmd, padx=14, pady=6, bd=0)
 
     def _placeholder(self, entry, text):
@@ -1015,9 +1024,9 @@ class MovieApp:
         tk.Label(win, text=self._about_text(), font=self.F["small"], fg=C["text"], bg=C["card"], justify="left").pack(padx=20, pady=(16, 8), anchor="w")
         bf = tk.Frame(win, bg=C["card"])
         bf.pack(fill="x", padx=20, pady=(0, 16))
-        tk.Button(bf, text="置き場を開く", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+        Button(bf, text="置き場を開く", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   padx=10, pady=3, bd=0, command=lambda: open_folder(APP_DIR)).pack(side="left")
-        tk.Button(bf, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
+        Button(bf, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", cursor="hand2",
                   padx=14, pady=3, bd=0, command=win.destroy).pack(side="right")
         win.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
@@ -1401,14 +1410,14 @@ class MovieApp:
                 r = tk.Frame(fr, bg=C["card"])
                 r.pack(fill="x", pady=1)
                 tk.Label(r, text=f"{taste.feature_label(feat)}  {v:+.1f}", font=self.F["small"], fg=C["text2"], bg=C["card"]).pack(side="left")
-                tk.Button(r, text="消す", font=self.F["caption"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=6, cursor="hand2",
+                Button(r, text="消す", font=self.F["caption"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=6, cursor="hand2",
                           command=lambda ft=feat: (self.taste.forget(ft), win.destroy(), self._open_taste(), self._filter_ns())).pack(side="right")
 
         column(cols, "好き (重みの上位)", likes)
         column(cols, "嫌い (重みの下位)", dislikes)
         tk.Label(f, text="仕組み: 監督・題名の語・人気の帯を特徴にした線形バンディット。WL 追加 +1、👍 +2、👎 −1、興味なし −1 で重みを少しずつ動かし、たまに 🎲 で未知の物を出します。",
                  font=self.F["caption"], fg=C["text3"], bg=C["bg"], wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
-        tk.Button(f, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", bd=0, padx=14, pady=3, cursor="hand2", command=win.destroy).pack(anchor="e", pady=(8, 0))
+        Button(f, text="閉じる", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", bd=0, padx=14, pady=3, cursor="hand2", command=win.destroy).pack(anchor="e", pady=(8, 0))
 
     def _maybe_notify(self):
         """取得の後: 変化があれば (か、まとめの日なら) 送る。設定が無ければ何もしない。"""
@@ -1590,7 +1599,7 @@ class MovieApp:
         self.mood_row.pack(fill="x", pady=(8, 0))
         self.mood_btns = {}
         for mood in picks.MOODS:
-            b = tk.Button(self.mood_row, text=mood, font=self.F["small"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+            b = Button(self.mood_row, text=mood, font=self.F["small"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
                           activebackground=C["border"], activeforeground=C["text"], disabledforeground=C["text3"],
                           command=lambda m=mood: self._set_mood(m))
             b.pack(side="left", padx=(0, 4))
@@ -1610,7 +1619,7 @@ class MovieApp:
             self._toggle_picks(force_hidden=True)
 
     def _flat(self, parent, text, cmd):
-        return tk.Button(parent, text=text, font=self.F["btn"], bg=C["bg3"], fg=C["text2"], activebackground=C["border"], activeforeground=C["text"],
+        return Button(parent, text=text, font=self.F["btn"], bg=C["bg3"], fg=C["text2"], activebackground=C["border"], activeforeground=C["text"],
                          relief="flat", bd=0, padx=12, pady=4, cursor="hand2", command=cmd)
 
     def _on_rail_configure(self, e=None):
@@ -1720,7 +1729,7 @@ class MovieApp:
         mark.pack(fill="x", pady=(4, 0))
 
         def small(text, cmd, primary=False):
-            return tk.Button(row, text=text, font=self.F["caption"], bg=C["accent"] if primary else C["bg3"], fg=C["on_accent"] if primary else C["text2"],
+            return Button(row, text=text, font=self.F["caption"], bg=C["accent"] if primary else C["bg3"], fg=C["on_accent"] if primary else C["text2"],
                              activebackground=C["accent_hover"] if primary else C["border"], activeforeground=C["on_accent"] if primary else C["text"],
                              relief="flat", bd=0, padx=8, pady=2, cursor="hand2", command=cmd)
 
@@ -1801,9 +1810,9 @@ class MovieApp:
             mark.config(text=text)
             ask.destroy()
 
-        tk.Button(bf, text="👍 良かった", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=lambda: answer("good", "観た 👍")).pack(side="left")
-        tk.Button(bf, text="👎 いまいち", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=lambda: answer("bad", "観た 👎")).pack(side="left", padx=(6, 0))
-        tk.Button(bf, text="閉じる", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=ask.destroy).pack(side="left", padx=(6, 0))
+        Button(bf, text="👍 良かった", font=self.F["small"], bg=C["accent"], fg="white", relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=lambda: answer("good", "観た 👍")).pack(side="left")
+        Button(bf, text="👎 いまいち", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=lambda: answer("bad", "観た 👎")).pack(side="left", padx=(6, 0))
+        Button(bf, text="閉じる", font=self.F["small"], bg=C["bg3"], fg=C["text2"], relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=ask.destroy).pack(side="left", padx=(6, 0))
         ask.update_idletasks()
         ask.geometry(f"+{card.winfo_rootx()}+{card.winfo_rooty() + card.winfo_height()}")
 
@@ -2598,7 +2607,7 @@ class MovieApp:
             if not total:
                 tk.Label(container, text="選択地域では上映館が見つかりませんでした。\n\n「変更」で別の地域を追加するか、eiga.comで確認してください。",
                          font=self.F["normal"], fg=C["text2"], bg=C["bg"], wraplength=520, justify="left").pack(pady=24)
-                tk.Button(container, text="eiga.com で劇場を探す", font=self.F["btn"], bg=C["accent"], fg="white", relief="flat",
+                Button(container, text="eiga.com で劇場を探す", font=self.F["btn"], bg=C["accent"], fg="white", relief="flat",
                           cursor="hand2", bd=0, padx=16, pady=6,
                           command=lambda: webbrowser.open(f"{EIGA_BASE}/movie/{movie_id}/theater/")).pack(pady=8)
                 return
@@ -2639,7 +2648,7 @@ class MovieApp:
         tk.Frame(popup, bg=C["separator"], height=1).pack(fill="x")
         bf = tk.Frame(popup, bg=C["bg"])
         bf.pack(fill="x", padx=20, pady=10)
-        tk.Button(bf, text="eiga.com で全地域を見る", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
+        Button(bf, text="eiga.com で全地域を見る", font=self.F["btn"], bg=C["bg3"], fg=C["text2"], relief="flat", cursor="hand2",
                   bd=0, padx=14, pady=6,
                   command=lambda: webbrowser.open(f"{EIGA_BASE}/movie/{movie_id}/theater/")).pack(side="right")
 
